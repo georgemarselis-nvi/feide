@@ -78,8 +78,8 @@ main() {
 	raw_name=$(field "$response" navn)
 	name=$(lower_stopwords "$(title_case "$raw_name")")
 
-	echo "navn: $name"
-	echo "organisasjonsnummer: $orgnr"
+	echo "NAVN=\"$name\""
+	echo "ORGANISASJONSNUMMER=\"$orgnr\""
 }
 
 main "$@"
