@@ -1,0 +1,22 @@
+dn: cn=noreduperson,cn=schema,cn=config
+objectClass: olcSchemaConfig
+cn: noreduperson
+olcAttributeTypes: ( 1.3.6.1.4.1.2428.90.1.10 NAME 'norEduPersonLegalName' DESC 'The legal name for the subject it is associated with' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 SINGLE-VALUE )
+olcAttributeTypes: ( 1.3.6.1.4.1.2428.90.1.5 NAME 'norEduPersonNIN' DESC 'National Identity Number, assigned by public authorities' EQUALITY caseIgnoreMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 SINGLE-VALUE )
+olcAttributeTypes: ( 1.3.6.1.4.1.2428.90.1.4 NAME 'norEduPersonLIN' DESC 'Locally defined unique identifier for a person' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )
+olcAttributeTypes: ( 1.3.6.1.4.1.2428.90.1.6 NAME 'norEduOrgAcronym' DESC 'Acronym for the organization.' EQUALITY caseIgnoreMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )
+olcAttributeTypes: ( 1.3.6.1.4.1.2428.90.1.3 NAME 'norEduPersonBirthDate' DESC 'Birth date for a person.' EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )
+olcAttributeTypes: ( 1.3.6.1.4.1.2428.90.1.11 NAME 'norEduOrgSchemaVersion' DESC 'Version number of the norEdu schema used by the organization' EQUALITY caseIgnoreMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )
+olcAttributeTypes: ( 1.3.6.1.4.1.2428.90.1.7 NAME 'norEduOrgUniqueIdentifier' DESC 'Unique identifier describing the organization.' EQUALITY caseIgnoreMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 SINGLE-VALUE )
+olcAttributeTypes: ( 1.3.6.1.4.1.2428.90.1.8 NAME 'norEduOrgUnitUniqueIdentifier' DESC 'Unique identifier describing the organizational unit.' EQUALITY caseIgnoreMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 SINGLE-VALUE )
+olcAttributeTypes: ( 1.3.6.1.4.1.2428.90.1.12 NAME 'norEduOrgNIN' DESC 'Identifier assigned to the organization by public authorities' EQUALITY caseIgnoreMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 SINGLE-VALUE )
+olcAttributeTypes: ( 1.3.6.1.4.1.2428.90.1.1 NAME 'norEduOrgUniqueNumber' DESC 'The number describing the institution.' EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )
+olcAttributeTypes: ( 1.3.6.1.4.1.2428.90.1.2 NAME 'norEduOrgUnitUniqueNumber' DESC 'The number describing the organizational unit.' EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )
+olcAttributeTypes: ( 1.3.6.1.4.1.2428.90.1.9 NAME 'federationFeideSchemaVersion' DESC 'The norEdu scheme version used by the LDAP of the organization .' EQUALITY caseIgnoreMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 SINGLE-VALUE )
+olcAttributeTypes: ( 1.3.6.1.4.1.2428.90.1.13 NAME 'norEduPersonServiceAuthnLevel' DESC 'Authentication level enforcement policies.' EQUALITY caseIgnoreMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )
+olcAttributeTypes: ( 1.3.6.1.4.1.2428.90.1.14 NAME 'norEduPersonAuthnMethod' DESC 'List of authentication methods that can be used by the subject.' EQUALITY caseIgnoreMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )
+olcAttributeTypes: ( 1.3.6.1.4.1.2428.90.1.15 NAME 'norEduPersonGuardianNIN' DESC 'National Identity Number for a person\27s legal guardians or natural guardians (parents), assigned by public authorities' EQUALITY caseIgnoreMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )
+olcObjectClasses: ( 1.3.6.1.4.1.2428.90.2.1 NAME 'norEduOrg' DESC 'Supplementary attributes for an educational organization' AUXILIARY MAY ( norEduOrgUniqueIdentifier $ norEduOrgNIN $ norEduOrgAcronym $ norEduOrgSchemaVersion $ dc $ mail $ labeledURI ) )
+olcObjectClasses: ( 1.3.6.1.4.1.2428.90.2.2 NAME 'norEduOrgUnit' DESC 'Supplementary attributes for a unit of an educational organization' AUXILIARY MAY ( norEduOrgUnitUniqueIdentifier $ norEduOrgAcronym $ cn $ mail $ labeledURI ) )
+olcObjectClasses: ( 1.3.6.1.4.1.2428.90.2.3 NAME 'norEduPerson' DESC 'Supplementary attributes for a person affiliated with an educational organization' AUXILIARY MAY ( norEduPersonLegalName $ norEduPersonNIN $ norEduPersonLIN $ norEduPersonBirthDate $ norEduPersonServiceAuthnLevel $ norEduPersonAuthnMethod $ norEduPersonGuardianNIN ) )
+olcObjectClasses: ( 1.3.6.1.4.1.2428.90.2.4 NAME 'norEduObsolete' DESC 'Attributes obsoleted in norEdu 1.4 or later' AUXILIARY MAY ( norEduOrgUniqueNumber $ norEduOrgUnitUniqueNumber $ federationFeideSchemaVersion ) )
