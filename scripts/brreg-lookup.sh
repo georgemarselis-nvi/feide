@@ -62,21 +62,48 @@ lower_stopwords() {
 	echo "$name"
 }
 
+fallback_by_name() {
+	keyword="$1"
+	fallback=$(curl -s --max-time 10 -G "$BRREG_API" --data-urlencode "navn=$keyword")
+
+	names=$(echo "$fallback" | jq -r '._embedded.enheter[] | .organisasjonsnummer + "\t" + .navn')
+	[ -n "$names" ] || { echo "brreg-lookup: no matches for '$keyword' either" >&2; exit 1; }
+
+	echo "Matches for '$keyword':" >&2
+	echo "$names" | nl -w2 -s') ' >&2
+
+	printf "Pick a number, or 0 to abort: " >&2
+	read -r choice
+	[ "$choice" -ge 1 ] 2>/dev/null || { echo "brreg-lookup: aborted" >&2; exit 1; }
+
+	picked=$(echo "$names" | sed -n "${choice}p")
+	[ -n "$picked" ] || { echo "brreg-lookup: no such choice" >&2; exit 1; }
+
+	orgnr=$(echo "$picked" | cut -f1)
+	raw_name=$(echo "$picked" | cut -f2)
+	tc=$(title_case "$raw_name")
+	name=$(lower_stopwords "$tc")
+	echo "$orgnr	$name"
+}
+
 main() {
 	[ $# -eq 1 ] || usage
 	domain="$1"
+	keyword=$(echo "$domain" | cut -d. -f1)
 
 	response=$(fetch "$domain")
 	count=$(hit_count "$response")
 
-	if [ "$count" -ne 1 ]; then
-		echo "brreg-lookup: $count matches for '$domain', need exactly 1" >&2
-		exit 1
+	if [ "$count" -eq 1 ]; then
+		orgnr=$(field "$response" organisasjonsnummer)
+		raw_name=$(field "$response" navn)
+		name=$(lower_stopwords "$(title_case "$raw_name")")
+	else
+		echo "brreg-lookup: $count matches for '$domain' on hjemmeside, falling back to name search" >&2
+		picked=$(fallback_by_name "$keyword")
+		orgnr=$(echo "$picked" | cut -f1)
+		name=$(echo "$picked" | cut -f2)
 	fi
-
-	orgnr=$(field "$response" organisasjonsnummer)
-	raw_name=$(field "$response" navn)
-	name=$(lower_stopwords "$(title_case "$raw_name")")
 
 	echo "NAVN=\"$name\""
 	echo "ORGANISASJONSNUMMER=\"$orgnr\""
