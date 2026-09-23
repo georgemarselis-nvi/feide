@@ -37,10 +37,13 @@
 #
 # In both cases the domain is the last two labels of the name.
 #
-# The egress lookup itself is a hard requirement. If the external
-# service returns nothing, this exits nonzero and the caller aborts.
-# A missing egress address means the network is not set up for this
-# to run, and that is for the operator to fix, not to guess around.
+# The egress lookup itself is a hard requirement. Three public services
+# are tried in turn (ifconfig.me, api.ipify.org, icanhazip.com); the
+# first that answers with a plausible IPv4 address wins. If none does,
+# this exits nonzero and the caller aborts. A missing egress address
+# means the network is not set up for this to run, and that is for the
+# operator to fix, not to guess around. The service list can be
+# overridden with DISCOVER_DOMAIN_EGRESS_SERVICES (space separated).
 #
 # Usable two ways:
 #   - executed directly: prints the domain on stdout, exit 1 on failure
@@ -49,10 +52,24 @@
 
 set -eu
 
-DISCOVER_DOMAIN_EGRESS_SERVICE="${DISCOVER_DOMAIN_EGRESS_SERVICE:-https://api.ipify.org}"
+DISCOVER_DOMAIN_EGRESS_SERVICES="${DISCOVER_DOMAIN_EGRESS_SERVICES:-https://ifconfig.me/ip https://api.ipify.org https://icanhazip.com}"
 
+# Takes a string, returns 0 if it is a dotted-quad IPv4 address.
+discover_domain_is_ipv4() {
+	echo "$1" | /usr/bin/grep -E -x '([0-9]{1,3}\.){3}[0-9]{1,3}' >/dev/null
+}
+
+# Asks each egress service in turn; prints the first plausible address.
 discover_domain_egress_ip() {
-	/usr/bin/curl -s --max-time 10 "$DISCOVER_DOMAIN_EGRESS_SERVICE"
+	for service in $DISCOVER_DOMAIN_EGRESS_SERVICES; do
+		ip=$(/usr/bin/curl -s --max-time 10 "$service" | /usr/bin/tr -d '[:space:]')
+		if discover_domain_is_ipv4 "$ip"; then
+			echo "$ip"
+			return 0
+		fi
+		echo "discover-domain: no usable answer from $service, trying next" >&2
+	done
+	return 1
 }
 
 # Takes a hostname, prints its last two labels.
@@ -94,7 +111,7 @@ discover_domain_main() {
 	if domain=$(discover_domain); then
 		echo "$domain"
 	else
-		echo "discover-domain: could not determine domain from egress address; no PTR and no resolvable resolver name" >&2
+		echo "discover-domain: could not determine domain; no egress address, or no PTR and no resolvable resolver name" >&2
 		exit 1
 	fi
 }
