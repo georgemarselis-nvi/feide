@@ -115,4 +115,7 @@ Active Directory, so the rules below are Active Directory rules, not proxy rules
   every NVI employee carries the same two values, member and employee, so nothing
   per user needs storing. Values like this are given to the container as
   environment variables and written into the configuration template at startup.
+- The norEdu schema file states no version of its own, so norEduOrgSchemaVersion
+  is set by hand in .env (NOREDUORGSCHEMAVERSION, currently 2.0) and written into
+  the organisation entry at startup.
 
