@@ -83,26 +83,26 @@ maxsize		10485760
 #
 # 2. People: proxied live to Active Directory.
 #
-database	ldap
-suffix		"ou=people,${BASE_DN}"
+database	        ldap
+suffix		        "ou=people,${BASE_DN}"
 subordinate
-uri		"ldap://${AD_SERVER}"
-readonly	on
-protocol-version 3
-network-timeout	10
+uri		            "ldap://${AD_SERVER}"
+readonly	        on
+protocol-version    3
+network-timeout	    10
 
 # The proxy authenticates to Active Directory as the machine account,
 # from the keytab named by KRB5_CLIENT_KTNAME. Every search Sikt makes
 # is carried out under that identity, whoever bound to the proxy.
-idassert-bind	bindmethod=sasl saslmech=GSSAPI mode=none
+idassert-bind	    bindmethod=sasl saslmech=GSSAPI mode=none
 idassert-authzFrom	"*"
-acl-bind	bindmethod=sasl saslmech=GSSAPI
+acl-bind	        bindmethod=sasl saslmech=GSSAPI
 
 # Active Directory returns referrals for its child naming contexts
 # (ForestDnsZones and friends); chase nothing, return nothing.
 chase-referrals	no
 
-overlay		rwm
+overlay		        rwm
 rwm-rewriteEngine	on
 
 # Local ou=people maps onto the whole Active Directory tree. People
@@ -120,13 +120,13 @@ rwm-rewriteRule		"^(.*)$" "(&(objectCategory=person)(objectClass=user)(!(userAcc
 # Directory calls them. Only the allowlist from the README passes;
 # everything Active Directory holds beyond it is dropped by the final
 # catch-all line.
-rwm-map		objectClass	inetOrgPerson	user
-rwm-map		attribute	uid			sAMAccountName
+rwm-map		objectClass	inetOrgPerson	        user
+rwm-map		attribute	uid			            sAMAccountName
 rwm-map		attribute	eduPersonPrincipalName	userPrincipalName
-rwm-map		attribute	cn			cn
-rwm-map		attribute	sn			sn
-rwm-map		attribute	givenName		givenName
-rwm-map		attribute	displayName		displayName
-rwm-map		attribute	mail			mail
-rwm-map		attribute	mobile			mobile
+rwm-map		attribute	cn			            cn
+rwm-map		attribute	sn			            sn
+rwm-map		attribute	givenName		        givenName
+rwm-map		attribute	displayName		        displayName
+rwm-map		attribute	mail			        mail
+rwm-map		attribute	mobile			        mobile
 rwm-map		attribute	*
