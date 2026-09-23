@@ -48,32 +48,53 @@ This list has two halves:
   plus displayName, mail, mobile, eduPersonAffiliation and eduPersonScopedAffiliation.
   We operate on an allowlist, not a denylist. Anything beyond it is added when a
   specitic service requires it.
-  
 - Attribute hygiene enforced by the FEIDE validator:
   - eduPersonPrincipalName contains no uppercase characters.
   - uid contains no non-ASCII characters.
   - schacHomeOrganization equals the realm part of eduPersonPrincipalName.
-  - No leading, trailing or doubled whitespace in cn, displayName, givenName,
-    mail, norEduPersonLegalName, sn or postalAddress.
+  - No leading, trailing or doubled whitespace in
+    - cn
+    - displayName
+    - givenName
+    - mail
+    - norEduPersonLegalName
+    - sn
+    - postalAddress.
   - mobile holds a valid Norwegian number.
-- Two-factor authentication is in place before the catalog is considered done.
-- Client networks reach idp.feide.no, auth.dataporten.no, api.dataporten.no and
-  groups-api.dataporten.no from the browser.
+- Browser access: any client network that filters outbound web traffic by
+  allowlist must permit
+  - idp.feide.no
+  - auth.dataporten.no
+  - api.dataporten.no
+  - groups-api.dataporten.no
+  FEIDE login in the browser cannot complete otherwise.
 
 ### Active Directory constraints
 
 The catalog holds no user data of its own. Every user attribute is read live from
 Active Directory, so the rules below are Active Directory rules, not catalog rules.
 
-- Usernames are never reused. A VI number belongs to one person forever, since
-  FEIDE identities are long-lived and a reissued username silently grants a new
+- Linux services authenticate through PAM and NSS which need LDAP and Kerberos.
+  Entra ID speaks Graph, OIDC and SAML and none of those use LDAP or Kerberos,
+  so Entra ID cannot answer what Linux asks. A local Active Directory node is
+  therefore required, on the Windows side.
+- Usernames can never be reused. A VI number must belong to one person forever. 
+  FEIDE identities depend on the username. A reused username silently grants a new
   person the old person's access. The four-digit VI pool holds 10000 numbers and
-  about 3000 are consumed, which has to be widened before it runs out.
-- Disabled means gone. Accounts with the disable bit set in userAccountControl are
-  filtered out of the catalog, so a leaver stops being able to log in.
-- One mail attribute. The on-prem mail attribute is authoritative. NVI runs hybrid
-  Exchange with a one-way sync, so aliases added cloud-side never write back and
-  are invisible to anything reading Active Directory, this catalog included.
+  about 3000 are consumed. The pool will have to be widened before the number scheme
+  runs out.
+- Accounts that are disabled in Active Directory must not appear in FEIDE.
+  Otherwise, disabling an account stops the person from logging in at
+  NVI but leaves them logging in to FEIDE services with the same credentials.
+  The OpenLDAP server should use an LDAP filter which will leave disabled 
+  accounts out. 
+- The mail attribute in Active Directory is the authoritative source for an
+  email address of a person. NVI runs hybrid Exchange and the sync only goes one
+  way, local to Entra ID. The consequence is that an address added in the cloud
+  never reaches Active Directory. Since FEIDE utilizes whatever Active Directory
+  outputs, employees will have to use their viXXXX@vetinst.no address, unless
+  there is a way to mirror aliases. For example, under the current setup, 
+  george.marselis@vetinst.no cooud not be used  a FEIDE sign-in address.
 - Phone fields hold phones. mobile is E.164 and holds nothing else.
 - Name attributes are clean: no doubled spaces, no stray leading or trailing
   whitespace, no non-ASCII in the account name. Every validator error above
@@ -88,4 +109,5 @@ Active Directory, so the rules below are Active Directory rules, not catalog rul
 
 ### Implementation
 
- The public certificates for NVI come from TrustZone over ACME, issued by GlobalSign. 
+- The public certificates for NVI come from TrustZone over ACME, issued by GlobalSign. 
+- Two-factor authentication is considered mandatory for this stage of the project.
