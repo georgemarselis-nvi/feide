@@ -1,5 +1,5 @@
 # feide
-FEIDE host-organisation catalog for the Norwegian Veterinary Institute
+FEIDE integration README for the Norwegian Veterinary Institute.
 
 ## Requirements
 
@@ -9,14 +9,14 @@ This list has two halves:
 
 ### Sikt constraints
 
-- The NVI catalog must be reachable over LDAPS. The certificate must be issued from
-  a public CA. 
+- FEIDE expects the NVI LDAP proxy to be reachable over LDAPS. The certificate must
+  be issued from a public CA. 
 - TLS 1.2 must stay enabled. TLS 1.3 alongside it is fine. Sikt will try to use TLS
   1.3, but some apps require TLS 1.2, so it is used as a common denominator. A TLS
   1.3-only server is unsupported by Sikt and fails testing on ssltest.feide.no.
 - Cipher suites: FEIDE lists twelve acceptable suites and requires support for at
-  least one of them. We will use the the four strongest and ease towards the full
-  list if Sikt fails to connect.
+  least one of them. We will use the four strongest and ease towards the full list
+  if Sikt fails to connect.
 
   Starting set:
 
@@ -25,7 +25,7 @@ This list has two halves:
   - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 (0xc02b)
   - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256   (0xc02f)
 
-  The remaining eight, in :
+  The remaining eight, in descending order of strength:
 
   - TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA    (0xc00a)
   - TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA      (0xc014)
@@ -44,10 +44,11 @@ This list has two halves:
   breaks service activation for individual units. NVI is 970955623.
 - Sikt has an LDAP crawler which searches the whole person subtree, either to find
   faults in LDAP or to validate a user. LDAP ACLs must permit that.
-- The catalog exposes only the minimal attribute set: the mandatory attributes
+  Pending confirmation, Sikt ticket #551520
+- The NVI FEIDE proxy exposes only the minimal attribute set: the mandatory attributes
   plus displayName, mail, mobile, eduPersonAffiliation and eduPersonScopedAffiliation.
   We operate on an allowlist, not a denylist. Anything beyond it is added when a
-  specitic service requires it.
+  specific service requires it.
 - Attribute hygiene enforced by the FEIDE validator:
   - eduPersonPrincipalName contains no uppercase characters.
   - uid contains no non-ASCII characters.
@@ -71,8 +72,8 @@ This list has two halves:
 
 ### Active Directory constraints
 
-The catalog holds no user data of its own. Every user attribute is read live from
-Active Directory, so the rules below are Active Directory rules, not catalog rules.
+The FEIDE proxy holds no user data of its own. Every user attribute is read live from
+Active Directory, so the rules below are Active Directory rules, not proxy rules.
 
 - Linux services authenticate through PAM and NSS which need LDAP and Kerberos.
   Entra ID speaks Graph, OIDC and SAML and none of those use LDAP or Kerberos,
@@ -94,20 +95,24 @@ Active Directory, so the rules below are Active Directory rules, not catalog rul
   never reaches Active Directory. Since FEIDE utilizes whatever Active Directory
   outputs, employees will have to use their viXXXX@vetinst.no address, unless
   there is a way to mirror aliases. For example, under the current setup, 
-  george.marselis@vetinst.no cooud not be used  a FEIDE sign-in address.
-- Phone fields hold phones. mobile is E.164 and holds nothing else.
-- Name attributes are clean: no doubled spaces, no stray leading or trailing
-  whitespace, no non-ASCII in the account name. Every validator error above
-  originates in Active Directory and is fixed there, not worked around in the
-  proxy.
-- Active Directory carries no eduPerson or inetOrgPerson classes. In NVI's
-  directory cn holds the username and displayName is surname-first, so the
-  mapping rewrites them rather than passing them through.
-- Attributes Active Directory cannot supply (norEduPersonNIN, the constant-value
-  affiliation attributes) do not come from the proxy and are resolved separately.
-
+  george.marselis@vetinst.no could not be used as a FEIDE sign-in address.
+- The mobile attribute holds a phone number using the +47XXXXXXXX form, exclusively.
+  The FEIDE validator rejects anything else. There is already one user who is
+  flagged in the FEIDE customer portal.
+- When the validator rules above are broken, we fix the data in Active Directory.
+  We should not have workarounds in the proxy.
+- Active Directory carries no eduPerson or inetOrgPerson classes. In NVI AD, cn 
+  holds the username and displayName is surname-first ("Marselis, George"). FEIDE
+  requires displayName and cn to hold the name as first name then last name, e.g.
+  "George Marselis". We will synthesize eduPerson and inetOrgPerson using the
+  rwm/"rewrite" overlay from OpenLDAP.
 
 ### Implementation
 
 - The public certificates for NVI come from TrustZone over ACME, issued by GlobalSign. 
 - Two-factor authentication is considered mandatory for this stage of the project.
+- Some attributes have no source in Active Directory. eduPersonAffiliation is one:
+  every NVI employee carries the same two values, member and employee, so nothing
+  per user needs storing. Values like this are given to the container as
+  environment variables and written into the configuration template at startup.
+
