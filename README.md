@@ -10,7 +10,7 @@ This list has two halves:
 ### Sikt constraints
 
 - FEIDE expects the NVI LDAP proxy to be reachable over LDAPS. The certificate must
-  be issued from a public CA. 
+  be issued from a public CA.
 - TLS 1.2 must stay enabled. TLS 1.3 alongside it is fine. Sikt will try to use TLS
   1.3, but some apps require TLS 1.2, so it is used as a common denominator. A TLS
   1.3-only server is unsupported by Sikt and fails testing on ssltest.feide.no.
