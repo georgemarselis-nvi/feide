@@ -1,0 +1,44 @@
+# org.ldif.template
+#
+# The one static entry in the FEIDE proxy: the organisation itself.
+# Filled by entrypoint.sh from .env and loaded into the local database
+# at container start; every ${NAME} below is replaced.
+#
+# Copyright (C) 2026 George Marselis <george.marselis@vetinst.no>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+#
+# Mandatory organisation attributes per the FEIDE higher-education
+# information model: eduOrgLegalName, norEduOrgNIN, norEduOrgSchemaVersion,
+# o and mail. norEduOrgAcronym is what NVI's OU structure calls itself.
+# The organisation number must match Brønnøysundregisteret exactly.
+
+dn: ${BASE_DN}
+objectClass: top
+objectClass: dcObject
+objectClass: organization
+objectClass: eduOrg
+objectClass: norEduOrg
+dc: ${DC}
+o: ${NAVN}
+eduOrgLegalName: ${NAVN}
+norEduOrgNIN: NO${ORGANISASJONSNUMMER}
+norEduOrgAcronym: ${NOREDUORGACRONYM}
+norEduOrgSchemaVersion: ${NOREDUORGSCHEMAVERSION}
+mail: ${ORG_MAIL}
+
+dn: ou=people,${BASE_DN}
+objectClass: top
+objectClass: organizationalUnit
+ou: people

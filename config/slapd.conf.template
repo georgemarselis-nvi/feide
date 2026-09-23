@@ -1,0 +1,132 @@
+# slapd.conf.template
+#
+# slapd configuration for the FEIDE proxy. Filled by entrypoint.sh
+# from .env at container start; every ${NAME} below is replaced.
+#
+# Copyright (C) 2026 George Marselis <george.marselis@vetinst.no>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+#
+# Layout:
+#
+#   ${BASE_DN}                     local mdb database, holds exactly one
+#                                  entry: the organisation (norEduOrg)
+#   ou=people,${BASE_DN}           back-ldap subordinate, proxied live to
+#                                  Active Directory at ${AD_BASE_DN}
+#
+# Nothing about a user is stored here. Every person entry Sikt reads is
+# fetched from Active Directory at that moment, renamed through the rwm
+# overlay and returned.
+
+include		/etc/openldap/schema/core.schema
+include		/etc/openldap/schema/cosine.schema
+include		/etc/openldap/schema/inetorgperson.schema
+include		/etc/openldap/schema/eduperson.schema
+include		/etc/openldap/schema/eduorg.schema
+include		/etc/openldap/schema/schac.schema
+include		/etc/openldap/schema/noredu.schema
+
+pidfile		/var/run/openldap/slapd.pid
+argsfile	/var/run/openldap/slapd.args
+
+modulepath	/usr/lib64/openldap
+moduleload	back_mdb.la
+moduleload	back_ldap.la
+moduleload	rwm.la
+
+# TLS. The certificate and key come from certbot on the host and are
+# mounted read only. TLS 1.2 stays enabled because Sikt requires it;
+# the suite list is the four ECDHE-GCM suites from the README, eased
+# towards Feide's full list of twelve only if Sikt fails to connect.
+TLSCertificateFile	/etc/openldap/certs/fullchain.pem
+TLSCertificateKeyFile	/etc/openldap/certs/privkey.pem
+TLSProtocolMin		3.3
+TLSCipherSuite		ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256
+
+# Plain LDAP and StartTLS are not offered. The listener is set on the
+# slapd command line in entrypoint.sh (ldaps:/// only).
+security	ssf=128
+
+loglevel	stats
+
+# Access control. Sikt's bind account reads person entries; everyone
+# else gets nothing. The account and its access are pending Sikt's
+# answer on ticket #551520; until then this grants read to the
+# authenticated account named in .env and denies the rest.
+access to attrs=userPassword
+	by * none
+
+access to dn.subtree="${BASE_DN}"
+	by dn.exact="${SIKT_BIND_DN}" read
+	by * none
+
+#
+# 1. The organisation entry: local, static, one entry.
+#
+database	mdb
+suffix		"${BASE_DN}"
+rootdn		"cn=admin,${BASE_DN}"
+directory	/var/lib/ldap
+maxsize		10485760
+
+#
+# 2. People: proxied live to Active Directory.
+#
+database	ldap
+suffix		"ou=people,${BASE_DN}"
+subordinate
+uri		"ldap://${AD_SERVER}"
+readonly	on
+protocol-version 3
+network-timeout	10
+
+# The proxy authenticates to Active Directory as the machine account,
+# from the keytab named by KRB5_CLIENT_KTNAME. Every search Sikt makes
+# is carried out under that identity, whoever bound to the proxy.
+idassert-bind	bindmethod=sasl saslmech=GSSAPI mode=none
+idassert-authzFrom	"*"
+acl-bind	bindmethod=sasl saslmech=GSSAPI
+
+# Active Directory returns referrals for its child naming contexts
+# (ForestDnsZones and friends); chase nothing, return nothing.
+chase-referrals	no
+
+overlay		rwm
+rwm-rewriteEngine	on
+
+# Local ou=people maps onto the whole Active Directory tree. People
+# live in several OUs there; the filter below picks users out.
+rwm-suffixmassage	"ou=people,${BASE_DN}" "${AD_BASE_DN}"
+
+# Every incoming filter is narrowed to enabled user objects. Bit 2 of
+# userAccountControl is ACCOUNTDISABLE; the matching rule OID is
+# Active Directory's bitwise AND. This is the "disabled accounts do
+# not appear in FEIDE" rule from the README.
+rwm-rewriteContext	searchFilter
+rwm-rewriteRule		"^(.*)$" "(&(objectCategory=person)(objectClass=user)(!(userAccountControl:1.2.840.113556.1.4.803:=2))$1)" ":"
+
+# Attribute names as FEIDE expects them, mapped onto what Active
+# Directory calls them. Only the allowlist from the README passes;
+# everything Active Directory holds beyond it is dropped by the final
+# catch-all line.
+rwm-map		objectClass	inetOrgPerson	user
+rwm-map		attribute	uid			sAMAccountName
+rwm-map		attribute	eduPersonPrincipalName	userPrincipalName
+rwm-map		attribute	cn			cn
+rwm-map		attribute	sn			sn
+rwm-map		attribute	givenName		givenName
+rwm-map		attribute	displayName		displayName
+rwm-map		attribute	mail			mail
+rwm-map		attribute	mobile			mobile
+rwm-map		attribute	*
