@@ -1,6 +1,32 @@
 # feide
 FEIDE integration README for the Norwegian Veterinary Institute.
 
+## Prerequisites
+
+What an organisation needs before the proxy can run. Nothing here is
+created by the proxy; it is what the proxy assumes exists.
+
+- Active Directory, reachable from the virtual machine on LDAP, which
+  contains the domain users.
+- A join account with the right to add a computer object, used once by
+  join-domain.sh and not stored.
+- DNS: the domain of the organisation should resolve, the domain
+  controllers are published in the _ldap._tcp.dc._msdcs SRV record
+  and the egress address of the virtual machine has a PTR record; or
+  the resolver has a resolvable name.
+- An organisational unit in Active Directory whose name is the
+  organisation's acronym (norEduOrgAcronym).
+- The organisation registered in Brønnøysundregisteret with its web
+  address (hjemmeside) filled in, so the organisation number can be found.
+- A publicly trusted certificate for the LDAPS hostname, renewed
+  automatically (ACME) or by hand.
+- A KVM host, or a hypervisor that imports a qcow2 image, to run one
+  virtual machine: a network address the domain controllers can reach,
+  outbound internet to brreg and the egress-IP services, inbound port 636
+  open to Sikt servers.
+- Someone with the FEIDE administrator role in the FEIDE customer portal
+  to point FEIDE at the new catalog.
+
 ## Requirements
 
 This list has two halves:
@@ -119,3 +145,11 @@ Active Directory, so the rules below are Active Directory rules, not proxy rules
   is set by hand in .env (NOREDUORGSCHEMAVERSION, currently 2.0) and written into
   the organisation entry at startup.
 
+
+## Operation
+
+The virtual machine is (mostly) immutable. There is no interactive login.
+The logs for slapd are sent off the machine at build time; changing its
+destination or level, like any other change, means rebuilding the machine from
+the repository and replacing it. Nothing is edited in place. The certificate is
+issued fresh at every build, so the machine is rebuilt before it expires.
