@@ -36,6 +36,7 @@ ENTRYPOINT_ENV_FILE="${ENTRYPOINT_ENV_FILE:-/etc/feide/.env}"
 ENTRYPOINT_KEYTAB="${KRB5_CLIENT_KTNAME:-/etc/krb5.keytab}"
 ENTRYPOINT_CERT=/etc/openldap/certs/fullchain.pem
 ENTRYPOINT_KEY=/etc/openldap/certs/privkey.pem
+ENTRYPOINT_AD_CA=/etc/openldap/certs/ad-ca.pem
 ENTRYPOINT_CONF=/etc/openldap/slapd.conf
 ENTRYPOINT_ORG_LDIF=/etc/openldap/org.ldif
 ENTRYPOINT_DB_DIR=/var/lib/ldap
@@ -84,6 +85,7 @@ entrypoint_check_mounts() {
 	[ -r "$ENTRYPOINT_KEYTAB" ] || entrypoint_fail "keytab $ENTRYPOINT_KEYTAB is missing or not readable by $(/usr/bin/id -un)"
 	[ -r "$ENTRYPOINT_CERT" ] || entrypoint_fail "certificate $ENTRYPOINT_CERT is missing"
 	[ -r "$ENTRYPOINT_KEY" ] || entrypoint_fail "key $ENTRYPOINT_KEY is missing"
+	[ -r "$ENTRYPOINT_AD_CA" ] || entrypoint_fail "Active Directory CA certificate $ENTRYPOINT_AD_CA is missing"
 }
 
 entrypoint_render() {
@@ -115,6 +117,7 @@ entrypoint_summary() {
 	done
 	echo "  keytab                  $ENTRYPOINT_KEYTAB"
 	echo "  certificate             $ENTRYPOINT_CERT"
+	echo "  AD CA certificate       $ENTRYPOINT_AD_CA"
 	echo
 	echo "The organisation number must match Brønnøysundregisteret exactly."
 	echo

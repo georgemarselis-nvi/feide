@@ -20,6 +20,9 @@ created by the proxy; it is what the proxy assumes exists.
   address (hjemmeside) filled in, so the organisation number can be found.
 - A publicly trusted certificate for the LDAPS hostname, renewed
   automatically (ACME) or by hand.
+- The CA certificate that issued the domain controllers' LDAPS
+  certificates, obtained from the Active Directory administrators, not
+  from the domain controllers over the network.
 - A KVM host, or a hypervisor that imports a qcow2 image, to run one
   virtual machine: a network address the domain controllers can reach,
   outbound internet to brreg and the egress-IP services, inbound port 636

@@ -90,6 +90,10 @@ readonly	        on
 protocol-version    3
 network-timeout	    10
 
+# Active Directory's LDAPS certificate is checked against the CA file
+# mounted next to the proxy's own certificate; no match, no connection.
+tls                 ldaps tls_cacert=/etc/openldap/certs/ad-ca.pem tls_reqcert=demand
+
 # The proxy authenticates to Active Directory as the machine account,
 # from the keytab named by KRB5_CLIENT_KTNAME. Every search Sikt makes
 # is carried out under that identity, whoever bound to the proxy.
