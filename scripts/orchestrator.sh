@@ -35,6 +35,17 @@
 #                           DOMAIN; the first domain controller listed
 #   AD_OU_DN                set by hand; the OU whose name is the acronym
 #   NOREDUORGACRONYM        ad-ou-acronym.sh, from AD_SERVER and AD_OU_DN
+#   ORG_MAIL                set by hand; the organisation's FEIDE
+#                           contact addresses, space separated
+#   EDUPERSONAFFILIATION    set by hand; the affiliations every person
+#                           gets, space separated
+#   FEIDE_PEOPLE_ACCOUNT_PATTERN
+#                           set by hand; which account names are people
+#   SIKT_ACCOUNT            set by hand; the AD account Sikt logs in with
+#   SIKT_BIND_DN            from SIKT_ACCOUNT and DOMAIN:
+#                           uid=<SIKT_ACCOUNT>,ou=people,<base DN>
+#   AD_BASE_DN              optional, set by hand; where people are
+#                           searched in AD. Without it, the whole domain
 #
 # Anything that can neither be found in .env nor derived stops the run
 # with a message naming the variable to add. Nothing is asked for
@@ -75,6 +86,12 @@ orchestrator_load_scripts() {
 
 # Creates the env file if absent and loads what it holds.
 orchestrator_load_env() {
+	# POSIX sh looks up a bare name like ".env" in PATH, not in the
+	# current directory, so a name without a slash gets "./" in front.
+	case "$ORCHESTRATOR_ENV_FILE" in
+		*/*) ;;
+		*) ORCHESTRATOR_ENV_FILE="./$ORCHESTRATOR_ENV_FILE" ;;
+	esac
 	[ -f "$ORCHESTRATOR_ENV_FILE" ] || /usr/bin/touch "$ORCHESTRATOR_ENV_FILE"
 	. "$ORCHESTRATOR_ENV_FILE"
 }
@@ -142,6 +159,21 @@ orchestrator_resolve_acronym() {
 	orchestrator_set NOREDUORGACRONYM "$NOREDUORGACRONYM"
 }
 
+orchestrator_resolve_by_hand() {
+	orchestrator_require ORG_MAIL "feide@$DOMAIN" || return 1
+	orchestrator_require EDUPERSONAFFILIATION "member employee" || return 1
+	orchestrator_require FEIDE_PEOPLE_ACCOUNT_PATTERN "dfo[0-9]{4}" || return 1
+}
+
+# The DN Sikt logs in with is built here rather than typed, since the
+# FEIDE server only accepts the form uid=<account>,ou=people,<base DN>.
+orchestrator_resolve_sikt() {
+	orchestrator_has SIKT_BIND_DN && return 0
+	orchestrator_require SIKT_ACCOUNT "feide-search-dfo" || return 1
+	base=$(echo "$DOMAIN" | /usr/bin/sed 's/\./,dc=/g; s/^/dc=/')
+	orchestrator_set SIKT_BIND_DN "uid=$SIKT_ACCOUNT,ou=people,$base"
+}
+
 orchestrator_resolve_keytab() {
 	[ -f "$ORCHESTRATOR_KEYTAB" ] && return 0
 	echo "orchestrator: no keytab at $ORCHESTRATOR_KEYTAB. Run join-domain.sh $DOMAIN as root on this host first, then run again." >&2
@@ -159,6 +191,11 @@ orchestrator_summary() {
 	echo "  NOREDUORGSCHEMAVERSION  $NOREDUORGSCHEMAVERSION"
 	echo "  AD_SERVER               $AD_SERVER"
 	echo "  AD_OU_DN                $AD_OU_DN"
+	echo "  AD_BASE_DN              ${AD_BASE_DN:-(whole domain)}"
+	echo "  SIKT_BIND_DN            $SIKT_BIND_DN"
+	echo "  ORG_MAIL                $ORG_MAIL"
+	echo "  EDUPERSONAFFILIATION    $EDUPERSONAFFILIATION"
+	echo "  FEIDE_PEOPLE_ACCOUNT_PATTERN  $FEIDE_PEOPLE_ACCOUNT_PATTERN"
 	echo "  keytab                  $ORCHESTRATOR_KEYTAB"
 	echo
 	echo "Check the organisation number against Brønnøysundregisteret before going further."
@@ -171,6 +208,8 @@ orchestrator() {
 	orchestrator_resolve_brreg || return 1
 	orchestrator_resolve_schema_version
 	orchestrator_resolve_acronym || return 1
+	orchestrator_resolve_by_hand || return 1
+	orchestrator_resolve_sikt || return 1
 	orchestrator_resolve_keytab || return 1
 	orchestrator_summary
 }
