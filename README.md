@@ -6,8 +6,8 @@ FEIDE integration README for the Norwegian Veterinary Institute.
 What an organisation needs before the proxy can run. Nothing here is
 created by the proxy; it is what the proxy assumes exists.
 
-- Active Directory, reachable from the virtual machine on LDAP, which
-  contains the domain users.
+- Active Directory, reachable from the virtual machine on LDAPS (636),
+  which contains the domain users.
 - A join account with the right to add a computer object, used once by
   join-domain.sh and not stored.
 - DNS: the domain of the organisation should resolve, the domain
@@ -23,7 +23,15 @@ created by the proxy; it is what the proxy assumes exists.
 - A KVM host, or a hypervisor that imports a qcow2 image, to run one
   virtual machine: a network address the domain controllers can reach,
   outbound internet to brreg and the egress-IP services, inbound port 636
-  open to Sikt servers.
+  open to the Sikt servers below (Sikt ticket #551520):
+  - 13.49.2.131
+  - 13.49.86.217
+  - 13.49.194.146
+  - 18.192.97.158
+  - 18.193.183.248
+  - 18.198.58.80
+  - 2a05:d016:15b:5a00::/56 (IPv6)
+  - 2a05:d014:909:ad00::/56 (IPv6)
 - Someone with the FEIDE administrator role in the FEIDE customer portal
   to point FEIDE at the new catalog.
 
@@ -68,9 +76,11 @@ This list has two halves:
   number, the legal name, the acronym and the schema version.
 - The organisation number must match Brønnøysundregisteret exactly. A mismatch
   breaks service activation for individual units. NVI is 970955623.
-- Sikt has an LDAP crawler which searches the whole person subtree, either to find
-  faults in LDAP or to validate a user. LDAP ACLs must permit that.
-  Pending confirmation, Sikt ticket #551520
+- Sikt has an LDAP crawler which reads the whole subtree under the base DN every 12
+  hours, with every attribute, to find faults. It binds as a system user which NVI
+  creates and whose credentials NVI gives to Sikt; Sikt has no service account of
+  its own. At login, FEIDE also binds as the user to check the password. LDAP ACLs
+  must permit both. (Sikt ticket #551520)
 - The NVI FEIDE proxy exposes only the minimal attribute set: the mandatory attributes
   plus displayName, mail, mobile, eduPersonAffiliation and eduPersonScopedAffiliation.
   We operate on an allowlist, not a denylist. Anything beyond it is added when a

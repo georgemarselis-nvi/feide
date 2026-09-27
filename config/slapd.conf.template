@@ -60,10 +60,9 @@ security	ssf=128
 
 loglevel	stats
 
-# Access control. Sikt's bind account reads person entries; everyone
-# else gets nothing. The account and its access are pending Sikt's
-# answer on ticket #551520; until then this grants read to the
-# authenticated account named in .env and denies the rest.
+# Access control. Sikt's crawler binds as the system user named in
+# .env and reads everything under the base DN (Sikt ticket #551520);
+# everyone else gets nothing.
 access to attrs=userPassword
 	by * none
 
@@ -86,7 +85,7 @@ maxsize		10485760
 database	        ldap
 suffix		        "ou=people,${BASE_DN}"
 subordinate
-uri		            "ldap://${AD_SERVER}"
+uri		            "ldaps://${AD_SERVER}"
 readonly	        on
 protocol-version    3
 network-timeout	    10
