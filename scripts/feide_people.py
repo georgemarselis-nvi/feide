@@ -31,6 +31,13 @@
 # Binds: the DN uid=<name>,ou=people,<base> becomes a simple bind to Active
 # Directory as <name>@<domain>, so Active Directory checks the password.
 #
+# Only accounts whose sAMAccountName matches FEIDE_PEOPLE_ACCOUNT_PATTERN in
+# .env (whole name, case ignored; NVI: vi[0-9]{4}) are people. Every other
+# account (shared mailboxes, rooms, instruments, admin and service accounts)
+# is filtered: searches never return it, a base search on it answers "no
+# such object", a bind as it fails, and each time a FILTERED line is logged.
+# The system user in SIKT_BIND_DN is exempt for binds only.
+#
 # Only the system user in SIKT_BIND_DN may search. slapd sends the bound DN
 # with every request (extensions binddn); any other search is refused before
 # Active Directory is contacted. Binds are open, since FEIDE checks each
@@ -38,6 +45,8 @@
 #
 # Values Active Directory does not hold in the form FEIDE wants:
 #   displayName, cn          "Marselis, George" -> "George Marselis"
+#                            "Wasimuddin, NFN" -> "Wasimuddin Wasimuddin"
+#   givenName                sn when Active Directory has no givenName
 #   norEduPersonLegalName    givenName plus sn
 #   eduPersonPrincipalName   userPrincipalName in lower case
 #   eduPersonAffiliation     constants from EDUPERSONAFFILIATION in .env
@@ -50,6 +59,7 @@
 
 import base64
 import os
+import re
 import socketserver
 import sys
 
@@ -92,7 +102,7 @@ def feide_people_log(message):
 
 def feide_people_config():
     config = {}
-    for name in ("FEIDE_PEOPLE_SOCKET", "FEIDE_PEOPLE_AD_CA", "AD_SERVER", "DOMAIN", "BASE_DN", "AD_BASE_DN", "EDUPERSONAFFILIATION", "SIKT_BIND_DN"):
+    for name in ("FEIDE_PEOPLE_SOCKET", "FEIDE_PEOPLE_AD_CA", "AD_SERVER", "DOMAIN", "BASE_DN", "AD_BASE_DN", "EDUPERSONAFFILIATION", "SIKT_BIND_DN", "FEIDE_PEOPLE_ACCOUNT_PATTERN"):
         value = os.environ.get(name, "")
         if not value:
             feide_people_log(name + " is not set")
@@ -100,7 +110,16 @@ def feide_people_config():
         config[name] = value
     config["AFFILIATIONS"] = config["EDUPERSONAFFILIATION"].split()
     config["PEOPLE_DN"] = "ou=people," + config["BASE_DN"]
+    config["ACCOUNT_RE"] = re.compile(config["FEIDE_PEOPLE_ACCOUNT_PATTERN"], re.IGNORECASE)
     return config
+
+
+def feide_people_is_person(config, account):
+    return config["ACCOUNT_RE"].fullmatch(account) is not None
+
+
+def feide_people_filtered(operation, account, request):
+    feide_people_log("FILTERED %s account=%r binddn=%r base=%r filter=%r" % (operation, account, request.get("binddn", ""), request.get("base", request.get("dn", "")), request.get("filter", "")))
 
 
 # ---------------------------------------------------------------------------
@@ -267,10 +286,13 @@ def feide_people_filter_to_ad(tree):
 # ---------------------------------------------------------------------------
 
 def feide_people_display_name(value):
-    """ "Marselis, George" -> "George Marselis"; anything without ", " is left alone."""
+    """ "Marselis, George" -> "George Marselis"; anything without ", " is left alone.
+    "Wasimuddin, NFN" (no first name) -> "Wasimuddin Wasimuddin"."""
     if ", " not in value:
         return value
     surname, given = value.split(", ", 1)
+    if given == "NFN":
+        given = surname
     return given + " " + surname
 
 
@@ -291,6 +313,10 @@ def feide_people_build_entry(config, ad):
         entry["cn"] = [feide_people_display_name(display)]
     given = feide_people_first(ad, "givenName")
     surname = feide_people_first(ad, "sn")
+    # A person with one name has it in sn and no givenName; FEIDE requires
+    # both, so the one name fills both.
+    if given is None and surname is not None:
+        given = surname
     if given is not None:
         entry["givenname"] = [given]
     if surname is not None:
@@ -460,6 +486,9 @@ def feide_people_search(config, request, write):
         uid = feide_people_uid_from_dn(config, base)
         if uid is None:
             return FEIDE_PEOPLE_LDAP_NO_SUCH_OBJECT, config["PEOPLE_DN"], 0
+        if not feide_people_is_person(config, uid):
+            feide_people_filtered("SEARCH", uid, request)
+            return FEIDE_PEOPLE_LDAP_NO_SUCH_OBJECT, config["PEOPLE_DN"], 0
         # A person entry is a leaf: base and subtree both mean the entry
         # itself, one level means nothing. The entry is looked up without
         # the filter so that "no such entry" and "does not match" differ.
@@ -480,6 +509,10 @@ def feide_people_search(config, request, write):
             write(feide_people_ldif(dn, entry))
     if users:
         for ad in feide_people_ad_search(config, ad_filter, 0):
+            account = feide_people_first(ad, "sAMAccountName") or ""
+            if not feide_people_is_person(config, account):
+                feide_people_filtered("SEARCH", account, request)
+                continue
             built = feide_people_build_entry(config, ad)
             if built is None or feide_people_filter_matches(tree, built[1]) is not True:
                 continue
@@ -501,6 +534,9 @@ def feide_people_bind(config, request):
         return FEIDE_PEOPLE_LDAP_INVALID_CREDENTIALS
     uid = feide_people_uid_from_dn(config, request.get("dn", ""))
     if uid is None:
+        return FEIDE_PEOPLE_LDAP_INVALID_CREDENTIALS
+    if not feide_people_is_person(config, uid) and not feide_people_is_system_user(config, request.get("dn", "")):
+        feide_people_filtered("BIND", uid, request)
         return FEIDE_PEOPLE_LDAP_INVALID_CREDENTIALS
     return feide_people_ad_bind(config, uid, password)
 
