@@ -68,7 +68,10 @@ entrypoint_base_dn() {
 
 entrypoint_derive() {
 	BASE_DN=$(entrypoint_base_dn "$DOMAIN")
-	AD_BASE_DN=$(echo "$BASE_DN" | /usr/bin/tr 'a-z' 'A-Z')
+	# Where feide_people.py searches Active Directory. .env may narrow it
+	# to the OU that holds people (NVI: OU=Bruker,OU=VI,DC=vetinst,DC=no);
+	# without it the whole domain is searched.
+	AD_BASE_DN=${AD_BASE_DN:-$(echo "$BASE_DN" | /usr/bin/tr 'a-z' 'A-Z')}
 	DC=$(echo "$DOMAIN" | /usr/bin/cut -d. -f1)
 	ORG_MAIL_LINES=$(entrypoint_mail_lines)
 	FEIDE_PEOPLE_SOCKET=$ENTRYPOINT_PEOPLE_SOCKET
@@ -117,6 +120,7 @@ entrypoint_summary() {
 	echo "  BASE_DN                 $BASE_DN"
 	echo "  NOREDUORGSCHEMAVERSION  $NOREDUORGSCHEMAVERSION"
 	echo "  AD_SERVER               $AD_SERVER"
+	echo "  AD_BASE_DN              $AD_BASE_DN"
 	echo "  SIKT_BIND_DN            $SIKT_BIND_DN"
 	echo "  FEIDE_PEOPLE_ACCOUNT_PATTERN  $FEIDE_PEOPLE_ACCOUNT_PATTERN"
 	for affiliation in $EDUPERSONAFFILIATION; do
