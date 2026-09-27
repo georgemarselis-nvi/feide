@@ -67,7 +67,17 @@ entrypoint_derive() {
 	BASE_DN=$(entrypoint_base_dn "$DOMAIN")
 	AD_BASE_DN=$(echo "$BASE_DN" | /usr/bin/tr 'a-z' 'A-Z')
 	DC=$(echo "$DOMAIN" | /usr/bin/cut -d. -f1)
-	export BASE_DN AD_BASE_DN DC DOMAIN NAVN ORGANISASJONSNUMMER NOREDUORGACRONYM NOREDUORGSCHEMAVERSION AD_SERVER SIKT_BIND_DN ORG_MAIL
+	ORG_MAIL_LINES=$(entrypoint_mail_lines)
+	export BASE_DN AD_BASE_DN DC ORG_MAIL_LINES DOMAIN NAVN ORGANISASJONSNUMMER NOREDUORGACRONYM NOREDUORGSCHEMAVERSION AD_SERVER SIKT_BIND_DN ORG_MAIL
+}
+
+# ORG_MAIL is a space separated list of addresses. mail is a
+# multi-valued attribute, so the organisation entry gets one line
+# per address.
+entrypoint_mail_lines() {
+	for addr in $ORG_MAIL; do
+		echo "mail: $addr"
+	done
 }
 
 entrypoint_check_mounts() {
@@ -100,7 +110,9 @@ entrypoint_summary() {
 	echo "  NOREDUORGSCHEMAVERSION  $NOREDUORGSCHEMAVERSION"
 	echo "  AD_SERVER               $AD_SERVER"
 	echo "  SIKT_BIND_DN            $SIKT_BIND_DN"
-	echo "  ORG_MAIL                $ORG_MAIL"
+	for addr in $ORG_MAIL; do
+		echo "  ORG_MAIL                $addr"
+	done
 	echo "  keytab                  $ENTRYPOINT_KEYTAB"
 	echo "  certificate             $ENTRYPOINT_CERT"
 	echo
