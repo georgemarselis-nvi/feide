@@ -50,7 +50,7 @@ ENV KRB5_CLIENT_KTNAME=/etc/krb5.keytab
 # Schema as delivered by Sikt, plus the templates the entrypoint fills.
 COPY schema/52-noredu.ldif /etc/openldap/schema/52-noredu.ldif
 COPY config/slapd.conf.template /etc/openldap/slapd.conf.template
-COPY config/org.ldif.template /etc/openldap/org.ldif.template
+COPY schema/org.ldif.template /etc/openldap/org.ldif.template
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 # The distro unit starts slapd with cn=config; this image uses a
