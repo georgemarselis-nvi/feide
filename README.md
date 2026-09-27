@@ -143,8 +143,10 @@ Active Directory, so the rules below are Active Directory rules, not proxy rules
 - Active Directory carries no eduPerson or inetOrgPerson classes. In NVI AD, cn 
   holds the username and displayName is surname-first ("Marselis, George"). FEIDE
   requires displayName and cn to hold the name as first name then last name, e.g.
-  "George Marselis". We will synthesize eduPerson and inetOrgPerson using the
-  rwm/"rewrite" overlay from OpenLDAP.
+  "George Marselis". OpenLDAP's rwm overlay can rename attributes but cannot
+  change their values, so slapd hands every request under ou=people to a small
+  Python program (scripts/feide_people.py, over OpenLDAP's back-sock) which
+  reads Active Directory and builds the eduPerson and inetOrgPerson entry.
 
 ### Implementation
 

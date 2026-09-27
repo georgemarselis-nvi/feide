@@ -22,12 +22,13 @@
 #
 #   ${BASE_DN}                     local mdb database, holds exactly one
 #                                  entry: the organisation (norEduOrg)
-#   ou=people,${BASE_DN}           back-ldap subordinate, proxied live to
-#                                  Active Directory at ${AD_BASE_DN}
+#   ou=people,${BASE_DN}           back-sock subordinate: every request is
+#                                  handed to scripts/feide_people.py over a
+#                                  Unix socket, which reads Active Directory
+#                                  at ${AD_BASE_DN} and formats the values
 #
 # Nothing about a user is stored here. Every person entry Sikt reads is
-# fetched from Active Directory at that moment, renamed through the rwm
-# overlay and returned.
+# fetched from Active Directory at that moment by feide_people.py.
 
 include		/etc/openldap/schema/core.schema
 include		/etc/openldap/schema/cosine.schema
@@ -42,8 +43,7 @@ argsfile	/var/run/openldap/slapd.args
 
 modulepath	/usr/lib64/openldap
 moduleload	back_mdb.la
-moduleload	back_ldap.la
-moduleload	rwm.la
+moduleload	back_sock.la
 
 # TLS. The certificate and key come from certbot on the host and are
 # mounted read only. TLS 1.2 stays enabled because Sikt requires it;
@@ -61,75 +61,39 @@ security	ssf=128
 loglevel	stats
 
 # Access control. Sikt's crawler binds as the system user named in
-# .env and reads everything under the base DN (Sikt ticket #551520);
-# everyone else gets nothing.
+# .env and reads everything under the base DN (Sikt ticket #551520).
+# Everyone else may only bind: back-sock checks auth access before it
+# hands a bind to feide_people.py, and FEIDE binds as each user to check
+# the password. Nothing is readable without the system user.
 access to attrs=userPassword
 	by * none
 
 access to dn.subtree="${BASE_DN}"
 	by dn.exact="${SIKT_BIND_DN}" read
-	by * none
+	by * auth
 
 #
-# 1. The organisation entry: local, static, one entry.
+# 1. People: handed to feide_people.py.
+#
+# A subordinate database must come before its superior in slapd.conf;
+# slapd looks for the superior among the databases defined after it.
+#
+database	sock
+suffix		"ou=people,${BASE_DN}"
+subordinate
+rootdn		"cn=admin,${BASE_DN}"
+readonly	on
+socketpath	/var/run/openldap/feide-people.sock
+
+# Every request carries the DN the connection is bound as, so
+# feide_people.py can refuse searches from anyone but the system user.
+extensions	binddn
+
+#
+# 2. The organisation entry: local, static, one entry.
 #
 database	mdb
 suffix		"${BASE_DN}"
 rootdn		"cn=admin,${BASE_DN}"
 directory	/var/lib/ldap
 maxsize		10485760
-
-#
-# 2. People: proxied live to Active Directory.
-#
-database	        ldap
-suffix		        "ou=people,${BASE_DN}"
-subordinate
-uri		            "ldaps://${AD_SERVER}"
-readonly	        on
-protocol-version    3
-network-timeout	    10
-
-# Active Directory's LDAPS certificate is checked against the CA file
-# mounted next to the proxy's own certificate; no match, no connection.
-tls                 ldaps tls_cacert=/etc/openldap/certs/ad-ca.pem tls_reqcert=demand
-
-# The proxy authenticates to Active Directory as the machine account,
-# from the keytab named by KRB5_CLIENT_KTNAME. Every search Sikt makes
-# is carried out under that identity, whoever bound to the proxy.
-idassert-bind	    bindmethod=sasl saslmech=GSSAPI mode=none
-idassert-authzFrom	"*"
-acl-bind	        bindmethod=sasl saslmech=GSSAPI
-
-# Active Directory returns referrals for its child naming contexts
-# (ForestDnsZones and friends); chase nothing, return nothing.
-chase-referrals	no
-
-overlay		        rwm
-rwm-rewriteEngine	on
-
-# Local ou=people maps onto the whole Active Directory tree. People
-# live in several OUs there; the filter below picks users out.
-rwm-suffixmassage	"ou=people,${BASE_DN}" "${AD_BASE_DN}"
-
-# Every incoming filter is narrowed to enabled user objects. Bit 2 of
-# userAccountControl is ACCOUNTDISABLE; the matching rule OID is
-# Active Directory's bitwise AND. This is the "disabled accounts do
-# not appear in FEIDE" rule from the README.
-rwm-rewriteContext	searchFilter
-rwm-rewriteRule		"^(.*)$" "(&(objectCategory=person)(objectClass=user)(!(userAccountControl:1.2.840.113556.1.4.803:=2))$1)" ":"
-
-# Attribute names as FEIDE expects them, mapped onto what Active
-# Directory calls them. Only the allowlist from the README passes;
-# everything Active Directory holds beyond it is dropped by the final
-# catch-all line.
-rwm-map		objectClass	inetOrgPerson	        user
-rwm-map		attribute	uid			            sAMAccountName
-rwm-map		attribute	eduPersonPrincipalName	userPrincipalName
-rwm-map		attribute	cn			            cn
-rwm-map		attribute	sn			            sn
-rwm-map		attribute	givenName		        givenName
-rwm-map		attribute	displayName		        displayName
-rwm-map		attribute	mail			        mail
-rwm-map		attribute	mobile			        mobile
-rwm-map		attribute	*

@@ -40,6 +40,8 @@ ENTRYPOINT_AD_CA=/etc/openldap/certs/ad-ca.pem
 ENTRYPOINT_CONF=/etc/openldap/slapd.conf
 ENTRYPOINT_ORG_LDIF=/etc/openldap/org.ldif
 ENTRYPOINT_DB_DIR=/var/lib/ldap
+ENTRYPOINT_PEOPLE=/usr/local/bin/feide_people.py
+ENTRYPOINT_PEOPLE_SOCKET=/var/run/openldap/feide-people.sock
 
 entrypoint_fail() {
 	echo "entrypoint: $1" >&2
@@ -54,7 +56,7 @@ entrypoint_require() {
 entrypoint_load_env() {
 	[ -f "$ENTRYPOINT_ENV_FILE" ] || entrypoint_fail "no env file at $ENTRYPOINT_ENV_FILE"
 	. "$ENTRYPOINT_ENV_FILE"
-	for name in DOMAIN NAVN ORGANISASJONSNUMMER NOREDUORGACRONYM NOREDUORGSCHEMAVERSION AD_SERVER SIKT_BIND_DN ORG_MAIL; do
+	for name in DOMAIN NAVN ORGANISASJONSNUMMER NOREDUORGACRONYM NOREDUORGSCHEMAVERSION AD_SERVER SIKT_BIND_DN ORG_MAIL EDUPERSONAFFILIATION; do
 		entrypoint_require "$name"
 	done
 }
@@ -69,7 +71,9 @@ entrypoint_derive() {
 	AD_BASE_DN=$(echo "$BASE_DN" | /usr/bin/tr 'a-z' 'A-Z')
 	DC=$(echo "$DOMAIN" | /usr/bin/cut -d. -f1)
 	ORG_MAIL_LINES=$(entrypoint_mail_lines)
-	export BASE_DN AD_BASE_DN DC ORG_MAIL_LINES DOMAIN NAVN ORGANISASJONSNUMMER NOREDUORGACRONYM NOREDUORGSCHEMAVERSION AD_SERVER SIKT_BIND_DN ORG_MAIL
+	FEIDE_PEOPLE_SOCKET=$ENTRYPOINT_PEOPLE_SOCKET
+	FEIDE_PEOPLE_AD_CA=$ENTRYPOINT_AD_CA
+	export BASE_DN AD_BASE_DN DC ORG_MAIL_LINES DOMAIN NAVN ORGANISASJONSNUMMER NOREDUORGACRONYM NOREDUORGSCHEMAVERSION AD_SERVER SIKT_BIND_DN ORG_MAIL EDUPERSONAFFILIATION FEIDE_PEOPLE_SOCKET FEIDE_PEOPLE_AD_CA
 }
 
 # ORG_MAIL is a space separated list of addresses. mail is a
@@ -96,9 +100,11 @@ entrypoint_render() {
 
 # Loads the organisation entry once. mdb creates data.mdb on first
 # use, so its absence means the database has never been populated.
+# -g keeps slapadd out of the back-sock database, which cannot take
+# entries.
 entrypoint_load_org() {
 	[ -f "$ENTRYPOINT_DB_DIR/data.mdb" ] && return 0
-	/usr/sbin/slapadd -q -f "$ENTRYPOINT_CONF" -b "$BASE_DN" -l "$ENTRYPOINT_ORG_LDIF" || entrypoint_fail "could not load the organisation entry"
+	/usr/sbin/slapadd -q -g -f "$ENTRYPOINT_CONF" -b "$BASE_DN" -l "$ENTRYPOINT_ORG_LDIF" || entrypoint_fail "could not load the organisation entry"
 }
 
 entrypoint_summary() {
@@ -112,6 +118,9 @@ entrypoint_summary() {
 	echo "  NOREDUORGSCHEMAVERSION  $NOREDUORGSCHEMAVERSION"
 	echo "  AD_SERVER               $AD_SERVER"
 	echo "  SIKT_BIND_DN            $SIKT_BIND_DN"
+	for affiliation in $EDUPERSONAFFILIATION; do
+		echo "  EDUPERSONAFFILIATION    $affiliation"
+	done
 	for addr in $ORG_MAIL; do
 		echo "  ORG_MAIL                $addr"
 	done
@@ -123,6 +132,17 @@ entrypoint_summary() {
 	echo
 }
 
+# Starts feide_people.py in the background and waits up to ten seconds
+# for its socket; slapd cannot answer for ou=people without it.
+entrypoint_start_people() {
+	/usr/bin/python3 "$ENTRYPOINT_PEOPLE" &
+	for second in 1 2 3 4 5 6 7 8 9 10; do
+		[ -S "$ENTRYPOINT_PEOPLE_SOCKET" ] && return 0
+		/usr/bin/sleep 1
+	done
+	entrypoint_fail "feide_people.py did not open $ENTRYPOINT_PEOPLE_SOCKET"
+}
+
 entrypoint_main() {
 	entrypoint_load_env
 	entrypoint_derive
@@ -130,6 +150,7 @@ entrypoint_main() {
 	entrypoint_render
 	entrypoint_load_org
 	entrypoint_summary
+	entrypoint_start_people
 	exec /usr/sbin/slapd -d stats -f "$ENTRYPOINT_CONF" -h "ldaps:///"
 }
 

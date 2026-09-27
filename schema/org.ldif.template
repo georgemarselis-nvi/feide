@@ -25,6 +25,8 @@
 # The organisation number must match Brønnøysundregisteret exactly.
 # ORG_MAIL_LINES is one "mail: address" line per address in ORG_MAIL,
 # built by entrypoint.sh, since mail is multi-valued.
+# ou=people is not here: it belongs to the back-sock database and
+# feide_people.py returns it.
 
 dn: ${BASE_DN}
 objectClass: top
@@ -39,8 +41,3 @@ norEduOrgNIN: NO${ORGANISASJONSNUMMER}
 norEduOrgAcronym: ${NOREDUORGACRONYM}
 norEduOrgSchemaVersion: ${NOREDUORGSCHEMAVERSION}
 ${ORG_MAIL_LINES}
-
-dn: ou=people,${BASE_DN}
-objectClass: top
-objectClass: organizationalUnit
-ou: people

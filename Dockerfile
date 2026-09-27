@@ -25,8 +25,9 @@
 #   /etc/openldap/certs/       certificate and key from certbot on the host
 #
 # The entrypoint reads .env, fills the slapd.conf and organisation
-# entry templates, prints the settings it is running with and starts
-# slapd on LDAPS only.
+# entry templates, prints the settings it is running with, starts
+# feide_people.py (which answers for ou=people over back-sock) and
+# starts slapd on LDAPS only.
 #
 # Red Hat does not ship openldap-servers in RHEL 9 itself; it comes
 # from EPEL 9, which is why EPEL is enabled below.
@@ -39,7 +40,7 @@ LABEL org.opencontainers.image.source="https://github.com/georgemarselis-nvi/fei
 LABEL org.opencontainers.image.licenses="GPL-3.0-or-later"
 
 RUN /usr/bin/dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
-RUN /usr/bin/dnf install -y openldap-servers openldap-clients cyrus-sasl-gssapi krb5-workstation gettext
+RUN /usr/bin/dnf install -y openldap-servers openldap-clients cyrus-sasl-gssapi krb5-workstation gettext python3 python3-ldap
 RUN /usr/bin/dnf clean all
 
 # Kerberos: slapd runs as the ldap user and binds to Active Directory
@@ -52,6 +53,7 @@ COPY schema/52-noredu.ldif /etc/openldap/schema/52-noredu.ldif
 COPY config/slapd.conf.template /etc/openldap/slapd.conf.template
 COPY schema/org.ldif.template /etc/openldap/org.ldif.template
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY scripts/feide_people.py /usr/local/bin/feide_people.py
 
 # The distro unit starts slapd with cn=config; this image uses a
 # generated slapd.conf instead, so the default config tree is removed
@@ -59,7 +61,7 @@ COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN /usr/bin/rm -rf /etc/openldap/slapd.d
 RUN /usr/bin/mkdir -p /etc/feide /etc/openldap/certs /var/run/openldap
 RUN /usr/bin/chown -R ldap:ldap /etc/openldap /var/run/openldap /var/lib/ldap
-RUN /usr/bin/chmod 0755 /usr/local/bin/entrypoint.sh
+RUN /usr/bin/chmod 0755 /usr/local/bin/entrypoint.sh /usr/local/bin/feide_people.py
 
 VOLUME ["/etc/feide", "/etc/openldap/certs"]
 
