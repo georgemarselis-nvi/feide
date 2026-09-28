@@ -11,6 +11,15 @@
 # Assumption: the required attribute list (cn, sn, givenName, displayName, eduPersonPrincipalName, mail) is not yet verified against the Feide information model.
 # The org unit checks only produce results against the proxy output, since AD holds no eduPerson attributes.
 #
+# Checks added from the AD clean-up of September 2026, each one a ticket sent to support:
+#   missing mobile (FEIDE uses it for two-factor authentication)
+#   displayName not in "Surname, Given" form, or with no space after the comma
+#   displayName names that differ from sn and givenName
+#   userPrincipalName that is not <uid>@<realm>
+# Disabled accounts are left out by default, as the proxy leaves them out. --account-pattern and
+# --blocklist limit the check to the accounts the proxy treats as people (FEIDE_PEOPLE_ACCOUNT_PATTERN
+# and FEIDE_PEOPLE_ACCOUNT_BLOCKLIST in .env).
+#
 # Copyright (C) 2026 George Marselis <george.marselis@vetinst.no>
 #
 # This program is free software: you can redistribute it and/or modify
@@ -51,7 +60,9 @@ def feide_check_parse_args(argv):
     parser.add_argument("--uri", required=True, help="LDAP URI, for example ldap://dc01.dfo.no")
     parser.add_argument("--base", required=True, help="search base, for example DC=dfo,DC=no")
     parser.add_argument("--realm", required=True, help="Feide realm (schacHomeOrganization), for example dfo.no")
-    parser.add_argument("--filter", default="(&(objectCategory=person)(objectClass=user))", help="search filter for user entries")
+    parser.add_argument("--filter", default="(&(objectCategory=person)(objectClass=user)(!(userAccountControl:1.2.840.113556.1.4.803:=2)))", help="search filter for user entries; the default leaves out disabled accounts")
+    parser.add_argument("--account-pattern", default="", help="only check accounts whose uid matches this regular expression in full, case ignored, for example vi[0-9]{4}")
+    parser.add_argument("--blocklist", default="", help="space separated uids to leave out even when they match --account-pattern")
     parser.add_argument("--eppn-attr", default="userPrincipalName", help="attribute that becomes eduPersonPrincipalName")
     parser.add_argument("--uid-attr", default="sAMAccountName", help="attribute that becomes uid")
     parser.add_argument("--page-size", type=int, default=500, help="paged search page size")
@@ -117,7 +128,41 @@ def feide_check_entry(attrs, args):
     for name in (args.eppn_attr,) + FEIDE_CHECK_REQUIRED_ATTRS:
         if not attrs.get(name.lower()):
             errors.append((name, "Missing required attribute: " + name, ""))
+    if not any(value.strip() for value in attrs.get("mobile", [])):
+        errors.append(("mobile", "Missing mobile (FEIDE uses it for two-factor authentication)", ""))
+    errors += feide_check_names(attrs)
+    uid = (attrs.get(args.uid_attr.lower()) or [""])[0]
+    for value in attrs.get(args.eppn_attr.lower(), []):
+        if uid and value.lower() != (uid + "@" + args.realm).lower():
+            errors.append((args.eppn_attr, "userPrincipalName is not <uid>@<realm> like the other accounts", value))
     return errors
+
+
+def feide_check_names(attrs):
+    """displayName is expected as "Surname, Given", matching sn and givenName."""
+    errors = []
+    display = (attrs.get("displayname") or [""])[0]
+    given = (attrs.get("givenname") or [""])[0]
+    surname = (attrs.get("sn") or [""])[0]
+    if not display:
+        return errors
+    if "," not in display:
+        errors.append(("displayName", "displayName is not in \"Surname, Given\" form", display))
+    elif ", " not in display:
+        errors.append(("displayName", "displayName has no space after the comma", display))
+    elif given and surname:
+        shown_surname, shown_given = display.split(", ", 1)
+        if shown_given == "NFN":
+            shown_given = shown_surname
+        if shown_surname != surname or shown_given != given:
+            errors.append(("displayName", "displayName names differ from sn and givenName", display + " | " + given + " | " + surname))
+    return errors
+
+
+def feide_check_is_person(uid, args):
+    if args.account_pattern and not re.fullmatch(args.account_pattern, uid, re.IGNORECASE):
+        return False
+    return uid.lower() not in {name.lower() for name in args.blocklist.split()}
 
 
 def feide_check_normalize_dn(dn):
@@ -169,6 +214,8 @@ def feide_check_main(argv):
         conn = feide_check_connect(args.uri)
         for dn, entry in feide_check_search(conn, args.base, args.filter, attrs, args.page_size):
             decoded = feide_check_decode(entry)
+            if not feide_check_is_person((decoded.get(args.uid_attr.lower()) or [""])[0], args):
+                continue
             for attr, message, value in feide_check_entry(decoded, args) + feide_check_orgunits(conn, decoded, cache):
                 feide_check_report(dn, attr, message, value, users)
             for name, index in seen.items():
