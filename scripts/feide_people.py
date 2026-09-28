@@ -36,6 +36,10 @@
 # account (shared mailboxes, rooms, instruments, admin and service accounts)
 # is filtered: searches never return it, a base search on it answers "no
 # such object", a bind as it fails, and each time a FILTERED line is logged.
+# Accounts listed in FEIDE_PEOPLE_ACCOUNT_BLOCKLIST (optional, space
+# separated, case ignored) are filtered the same way even when they match
+# the pattern; for NVI vi1576 ("Vikar Resepsjonen"), a shared reception
+# account with a person-style name.
 # The system user in SIKT_BIND_DN is exempt for binds only.
 #
 # Only the system user in SIKT_BIND_DN may search. slapd sends the bound DN
@@ -111,11 +115,12 @@ def feide_people_config():
     config["AFFILIATIONS"] = config["EDUPERSONAFFILIATION"].split()
     config["PEOPLE_DN"] = "ou=people," + config["BASE_DN"]
     config["ACCOUNT_RE"] = re.compile(config["FEIDE_PEOPLE_ACCOUNT_PATTERN"], re.IGNORECASE)
+    config["BLOCKLIST"] = {name.lower() for name in os.environ.get("FEIDE_PEOPLE_ACCOUNT_BLOCKLIST", "").split()}
     return config
 
 
 def feide_people_is_person(config, account):
-    return config["ACCOUNT_RE"].fullmatch(account) is not None
+    return config["ACCOUNT_RE"].fullmatch(account) is not None and account.lower() not in config["BLOCKLIST"]
 
 
 def feide_people_filtered(operation, account, request):
