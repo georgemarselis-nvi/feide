@@ -4,11 +4,13 @@
 #
 # run it as:
 #
-#   /usr/bin/python3 scripts/feide_check.py --uri ldap://dc01.dfo.no --base DC=dfo,DC=no --realm dfo.no
+#   /usr/bin/python3 scripts/feide_check.py --uri ldap://dc01.dfo.no
+#
+# --realm (dfo.no) and --base (DC=DFO,DC=NO) are derived from the --uri host; pass them to override.
 #
 # one account only:
 #
-#   /usr/bin/python3 scripts/feide_check.py --uri ldap://dc01.dfo.no --base DC=dfo,DC=no --realm dfo.no --account df1234
+#   /usr/bin/python3 scripts/feide_check.py --uri ldap://dc01.dfo.no --account df1234
 #
 # Assumption: Feide does not publish its mobile check; this script accepts only +47 followed by eight digits.
 # Assumption: norEduPersonLegalName is built from givenName plus sn, so its whitespace errors are reported under those two attributes.
@@ -44,6 +46,7 @@ import collections
 import datetime
 import re
 import sys
+import urllib.parse
 
 import ldap
 import ldap.dn
@@ -67,8 +70,8 @@ FEIDE_CHECK_FILETIME_EPOCH = datetime.datetime(1601, 1, 1, tzinfo=datetime.timez
 def feide_check_parse_args(argv):
     parser = argparse.ArgumentParser(description="Check LDAP user entries against the Feide customer portal attribute rules.")
     parser.add_argument("--uri", required=True, help="LDAP URI, for example ldap://dc01.dfo.no")
-    parser.add_argument("--base", required=True, help="search base, for example DC=dfo,DC=no")
-    parser.add_argument("--realm", required=True, help="Feide realm (schacHomeOrganization), for example dfo.no")
+    parser.add_argument("--base", default=None, help="search base, for example DC=dfo,DC=no; derived from the realm when left out")
+    parser.add_argument("--realm", default=None, help="Feide realm (schacHomeOrganization), for example dfo.no; derived from the --uri host when left out")
     parser.add_argument("--account", action="append", default=[], help="check only this uid; repeat for more, for example --account vi1234 --account vi5678")
     parser.add_argument("--include-disabled", action="store_true", help="check disabled accounts too")
     parser.add_argument("--filter", default=None, help="raw LDAP search filter for special cases; overrides --account and --include-disabled")
@@ -82,9 +85,26 @@ def feide_check_parse_args(argv):
     args.account_re = re.compile(args.account_pattern, re.IGNORECASE) if args.account_pattern else None
     args.blocked = {name.lower() for name in args.blocklist.split()}
     args.now = datetime.datetime.now(datetime.timezone.utc)
+    if args.realm is None:
+        args.realm = feide_check_realm_from_uri(args.uri)
+        if args.realm is None:
+            parser.error(f"cannot derive the realm from --uri {args.uri}; pass --realm")
+    if args.base is None:
+        args.base = ",".join("DC=" + label.upper() for label in args.realm.split("."))
     if args.filter is None:
         args.filter = feide_check_build_filter(args)
     return args
+
+
+# Takes an LDAP URI; returns the domain of its host with the first label
+# dropped (ldaps://dc02.vetinst.no -> vetinst.no), or None when the host
+# is an address or has fewer than three labels.
+def feide_check_realm_from_uri(uri):
+    host = urllib.parse.urlsplit(uri).hostname or ""
+    labels = host.split(".")
+    if len(labels) < 3 or all(label.isdigit() for label in labels) or ":" in host:
+        return None
+    return ".".join(labels[1:]).lower()
 
 
 # Takes the parsed arguments; returns the search filter for people,
