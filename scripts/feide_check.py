@@ -6,13 +6,17 @@
 #
 #   /usr/bin/python3 scripts/feide_check.py --uri ldap://dc01.dfo.no --base DC=dfo,DC=no --realm dfo.no
 #
+# one account only:
+#
+#   /usr/bin/python3 scripts/feide_check.py --uri ldap://dc01.dfo.no --base DC=dfo,DC=no --realm dfo.no --account df1234
+#
 # Assumption: Feide does not publish its mobile check; this script accepts only +47 followed by eight digits.
 # Assumption: norEduPersonLegalName is built from givenName plus sn, so its whitespace errors are reported under those two attributes.
 # Assumption: the required attribute list (cn, sn, givenName, displayName, eduPersonPrincipalName, mail) is not yet verified against the Feide information model.
 # The org unit checks only produce results against the proxy output, since AD holds no eduPerson attributes.
 #
 # Active Directory checks, which only produce results against AD itself:
-#   disabled accounts are left out by the default filter, since they never reach Feide;
+#   disabled accounts are left out unless --include-disabled, since they never reach Feide;
 #   --account-pattern and --blocklist leave out accounts that are not people (NVI: vi[0-9]{4}, vi1576);
 #   a missing mobile is reported, since Feide two-factor needs it;
 #   displayName must be "Surname, Given" with the same names as sn and givenName;
@@ -43,6 +47,7 @@ import sys
 
 import ldap
 import ldap.dn
+import ldap.filter
 import ldap.sasl
 from ldap.controls import SimplePagedResultsControl
 
@@ -54,7 +59,6 @@ FEIDE_CHECK_PRIMARY_ORGUNIT_ATTR = "eduPersonPrimaryOrgUnitDN"
 FEIDE_CHECK_WHITESPACE_RE = re.compile(r"^\s|\s$|\s{2,}")
 FEIDE_CHECK_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 FEIDE_CHECK_MOBILE_RE = re.compile(r"^\+47[0-9]{8}$")
-FEIDE_CHECK_DEFAULT_FILTER = "(&(objectCategory=person)(objectClass=user)(!(userAccountControl:1.2.840.113556.1.4.803:=2)))"
 FEIDE_CHECK_HIDE_MARKER = "skjulmeg"
 # lastLogonTimestamp counts 100 ns intervals since 1601-01-01 UTC.
 FEIDE_CHECK_FILETIME_EPOCH = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc)
@@ -65,7 +69,9 @@ def feide_check_parse_args(argv):
     parser.add_argument("--uri", required=True, help="LDAP URI, for example ldap://dc01.dfo.no")
     parser.add_argument("--base", required=True, help="search base, for example DC=dfo,DC=no")
     parser.add_argument("--realm", required=True, help="Feide realm (schacHomeOrganization), for example dfo.no")
-    parser.add_argument("--filter", default=FEIDE_CHECK_DEFAULT_FILTER, help="search filter for user entries; the default leaves out disabled accounts")
+    parser.add_argument("--account", action="append", default=[], help="check only this uid; repeat for more, for example --account vi1234 --account vi5678")
+    parser.add_argument("--include-disabled", action="store_true", help="check disabled accounts too")
+    parser.add_argument("--filter", default=None, help="raw LDAP search filter for special cases; overrides --account and --include-disabled")
     parser.add_argument("--eppn-attr", default="userPrincipalName", help="attribute that becomes eduPersonPrincipalName")
     parser.add_argument("--uid-attr", default="sAMAccountName", help="attribute that becomes uid")
     parser.add_argument("--account-pattern", default=None, help="regular expression a uid must match in full to be checked, for example vi[0-9]{4}")
@@ -76,7 +82,22 @@ def feide_check_parse_args(argv):
     args.account_re = re.compile(args.account_pattern, re.IGNORECASE) if args.account_pattern else None
     args.blocked = {name.lower() for name in args.blocklist.split()}
     args.now = datetime.datetime.now(datetime.timezone.utc)
+    if args.filter is None:
+        args.filter = feide_check_build_filter(args)
     return args
+
+
+# Takes the parsed arguments; returns the search filter for people,
+# without disabled accounts unless --include-disabled, narrowed to the
+# --account uids when given.
+def feide_check_build_filter(args):
+    parts = "(objectCategory=person)(objectClass=user)"
+    if not args.include_disabled:
+        parts += "(!(userAccountControl:1.2.840.113556.1.4.803:=2))"
+    if args.account:
+        uids = "".join(f"({args.uid_attr}={ldap.filter.escape_filter_chars(uid)})" for uid in args.account)
+        parts += uids if len(args.account) == 1 else f"(|{uids})"
+    return f"(&{parts})"
 
 
 def feide_check_connect(uri):
