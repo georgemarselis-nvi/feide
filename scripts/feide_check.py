@@ -11,14 +11,14 @@
 # Assumption: the required attribute list (cn, sn, givenName, displayName, eduPersonPrincipalName, mail) is not yet verified against the Feide information model.
 # The org unit checks only produce results against the proxy output, since AD holds no eduPerson attributes.
 #
-# Checks added from the AD clean-up of September 2026, each one a ticket sent to support:
-#   missing mobile (FEIDE uses it for two-factor authentication)
-#   displayName not in "Surname, Given" form, or with no space after the comma
-#   displayName names that differ from sn and givenName
-#   userPrincipalName that is not <uid>@<realm>
-# Disabled accounts are left out by default, as the proxy leaves them out. --account-pattern and
-# --blocklist limit the check to the accounts the proxy treats as people (FEIDE_PEOPLE_ACCOUNT_PATTERN
-# and FEIDE_PEOPLE_ACCOUNT_BLOCKLIST in .env).
+# Active Directory checks, which only produce results against AD itself:
+#   disabled accounts are left out by the default filter, since they never reach Feide;
+#   --account-pattern and --blocklist leave out accounts that are not people (NVI: vi[0-9]{4}, vi1576);
+#   a missing mobile is reported, since Feide two-factor needs it;
+#   displayName must be "Surname, Given" with the same names as sn and givenName;
+#   an enabled account whose info (Notes) field contains "skjulmeg" is reported as a possible leaver;
+#   an account with no lastLogonTimestamp newer than --stale-days is reported; people who only use
+#   Microsoft 365 in the cloud also show up here, so check before disabling anyone.
 #
 # Copyright (C) 2026 George Marselis <george.marselis@vetinst.no>
 #
@@ -37,6 +37,7 @@
 
 import argparse
 import collections
+import datetime
 import re
 import sys
 
@@ -53,6 +54,10 @@ FEIDE_CHECK_PRIMARY_ORGUNIT_ATTR = "eduPersonPrimaryOrgUnitDN"
 FEIDE_CHECK_WHITESPACE_RE = re.compile(r"^\s|\s$|\s{2,}")
 FEIDE_CHECK_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 FEIDE_CHECK_MOBILE_RE = re.compile(r"^\+47[0-9]{8}$")
+FEIDE_CHECK_DEFAULT_FILTER = "(&(objectCategory=person)(objectClass=user)(!(userAccountControl:1.2.840.113556.1.4.803:=2)))"
+FEIDE_CHECK_HIDE_MARKER = "skjulmeg"
+# lastLogonTimestamp counts 100 ns intervals since 1601-01-01 UTC.
+FEIDE_CHECK_FILETIME_EPOCH = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc)
 
 
 def feide_check_parse_args(argv):
@@ -60,13 +65,18 @@ def feide_check_parse_args(argv):
     parser.add_argument("--uri", required=True, help="LDAP URI, for example ldap://dc01.dfo.no")
     parser.add_argument("--base", required=True, help="search base, for example DC=dfo,DC=no")
     parser.add_argument("--realm", required=True, help="Feide realm (schacHomeOrganization), for example dfo.no")
-    parser.add_argument("--filter", default="(&(objectCategory=person)(objectClass=user)(!(userAccountControl:1.2.840.113556.1.4.803:=2)))", help="search filter for user entries; the default leaves out disabled accounts")
-    parser.add_argument("--account-pattern", default="", help="only check accounts whose uid matches this regular expression in full, case ignored, for example vi[0-9]{4}")
-    parser.add_argument("--blocklist", default="", help="space separated uids to leave out even when they match --account-pattern")
+    parser.add_argument("--filter", default=FEIDE_CHECK_DEFAULT_FILTER, help="search filter for user entries; the default leaves out disabled accounts")
     parser.add_argument("--eppn-attr", default="userPrincipalName", help="attribute that becomes eduPersonPrincipalName")
     parser.add_argument("--uid-attr", default="sAMAccountName", help="attribute that becomes uid")
+    parser.add_argument("--account-pattern", default=None, help="regular expression a uid must match in full to be checked, for example vi[0-9]{4}")
+    parser.add_argument("--blocklist", default="", help="space separated uids to leave out even if they match the pattern, for example vi1576")
+    parser.add_argument("--stale-days", type=int, default=180, help="report accounts with no logon in this many days")
     parser.add_argument("--page-size", type=int, default=500, help="paged search page size")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    args.account_re = re.compile(args.account_pattern, re.IGNORECASE) if args.account_pattern else None
+    args.blocked = {name.lower() for name in args.blocklist.split()}
+    args.now = datetime.datetime.now(datetime.timezone.utc)
+    return args
 
 
 def feide_check_connect(uri):
@@ -128,41 +138,51 @@ def feide_check_entry(attrs, args):
     for name in (args.eppn_attr,) + FEIDE_CHECK_REQUIRED_ATTRS:
         if not attrs.get(name.lower()):
             errors.append((name, "Missing required attribute: " + name, ""))
-    if not any(value.strip() for value in attrs.get("mobile", [])):
-        errors.append(("mobile", "Missing mobile (FEIDE uses it for two-factor authentication)", ""))
-    errors += feide_check_names(attrs)
+    return errors
+
+
+# Takes the decoded attributes; returns True when the account is a person
+# by --account-pattern and --blocklist. Without a pattern every account is.
+def feide_check_is_person(attrs, args):
     uid = (attrs.get(args.uid_attr.lower()) or [""])[0]
-    for value in attrs.get(args.eppn_attr.lower(), []):
-        if uid and value.lower() != (uid + "@" + args.realm).lower():
-            errors.append((args.eppn_attr, "userPrincipalName is not <uid>@<realm> like the other accounts", value))
-    return errors
-
-
-def feide_check_names(attrs):
-    """displayName is expected as "Surname, Given", matching sn and givenName."""
-    errors = []
-    display = (attrs.get("displayname") or [""])[0]
-    given = (attrs.get("givenname") or [""])[0]
-    surname = (attrs.get("sn") or [""])[0]
-    if not display:
-        return errors
-    if "," not in display:
-        errors.append(("displayName", "displayName is not in \"Surname, Given\" form", display))
-    elif ", " not in display:
-        errors.append(("displayName", "displayName has no space after the comma", display))
-    elif given and surname:
-        shown_surname, shown_given = display.split(", ", 1)
-        if shown_given == "NFN":
-            shown_given = shown_surname
-        if shown_surname != surname or shown_given != given:
-            errors.append(("displayName", "displayName names differ from sn and givenName", display + " | " + given + " | " + surname))
-    return errors
-
-
-def feide_check_is_person(uid, args):
-    if args.account_pattern and not re.fullmatch(args.account_pattern, uid, re.IGNORECASE):
+    if uid.lower() in args.blocked:
         return False
-    return uid.lower() not in {name.lower() for name in args.blocklist.split()}
+    return args.account_re is None or args.account_re.fullmatch(uid) is not None
+
+
+# Takes a lastLogonTimestamp value; returns a UTC datetime, or None for 0.
+def feide_check_filetime(value):
+    ticks = int(value)
+    if ticks <= 0:
+        return None
+    return FEIDE_CHECK_FILETIME_EPOCH + datetime.timedelta(microseconds=ticks // 10)
+
+
+def feide_check_ad(attrs, args):
+    errors = []
+    if not attrs.get("mobile"):
+        errors.append(("mobile", "Missing mobile (needed for two-factor authentication)", ""))
+    sn = (attrs.get("sn") or [""])[0]
+    given = (attrs.get("givenname") or [""])[0]
+    for value in attrs.get("displayname", []):
+        surname, comma, rest = value.partition(",")
+        if not comma:
+            errors.append(("displayName", "displayName is not in the form \"Surname, Given\"", value))
+            continue
+        if not rest.startswith(" "):
+            errors.append(("displayName", "No space after the comma in displayName", value))
+        if surname.strip() != sn.strip() or rest.strip() != given.strip():
+            errors.append(("displayName", "displayName differs from sn and givenName", f"{value} (sn={sn!r}, givenName={given!r})"))
+    for value in attrs.get("info", []):
+        if FEIDE_CHECK_HIDE_MARKER in value.lower():
+            errors.append(("info", "Marked \"skjulmeg\" but still enabled", value))
+    stamps = attrs.get("lastlogontimestamp", [])
+    last = feide_check_filetime(stamps[0]) if stamps else None
+    if last is None:
+        errors.append(("lastLogonTimestamp", "Never logged on to on-premises Active Directory", ""))
+    elif (args.now - last).days > args.stale_days:
+        errors.append(("lastLogonTimestamp", f"No logon to on-premises Active Directory in {args.stale_days} days", last.date().isoformat()))
+    return errors
 
 
 def feide_check_normalize_dn(dn):
@@ -205,7 +225,7 @@ def feide_check_report(dn, attr, message, value, users):
 
 def feide_check_main(argv):
     args = feide_check_parse_args(argv)
-    attrs = [args.eppn_attr, args.uid_attr, "mobile", FEIDE_CHECK_ORGUNIT_ATTR, FEIDE_CHECK_PRIMARY_ORGUNIT_ATTR]
+    attrs = [args.eppn_attr, args.uid_attr, "mobile", "info", "lastLogonTimestamp", FEIDE_CHECK_ORGUNIT_ATTR, FEIDE_CHECK_PRIMARY_ORGUNIT_ATTR]
     attrs += [name for name in FEIDE_CHECK_WHITESPACE_ATTRS + FEIDE_CHECK_REQUIRED_ATTRS if name not in attrs]
     users = collections.defaultdict(set)
     seen = {args.eppn_attr: collections.defaultdict(set), args.uid_attr: collections.defaultdict(set)}
@@ -214,9 +234,9 @@ def feide_check_main(argv):
         conn = feide_check_connect(args.uri)
         for dn, entry in feide_check_search(conn, args.base, args.filter, attrs, args.page_size):
             decoded = feide_check_decode(entry)
-            if not feide_check_is_person((decoded.get(args.uid_attr.lower()) or [""])[0], args):
+            if not feide_check_is_person(decoded, args):
                 continue
-            for attr, message, value in feide_check_entry(decoded, args) + feide_check_orgunits(conn, decoded, cache):
+            for attr, message, value in feide_check_entry(decoded, args) + feide_check_ad(decoded, args) + feide_check_orgunits(conn, decoded, cache):
                 feide_check_report(dn, attr, message, value, users)
             for name, index in seen.items():
                 for value in decoded.get(name.lower(), []):
