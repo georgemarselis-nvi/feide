@@ -1,18 +1,22 @@
 #!/usr/bin/python3
-# feide_check.py
+# feide_scanner.py
 # Checks the user entries of an LDAP directory for the attribute errors reported by the Feide customer portal and for violations of the eduPerson and norEdu schema definitions.
 #
 # run it as:
 #
-#   /usr/bin/python3 scripts/feide_check.py --uri ldap://dc01.dfo.no
+#   /usr/bin/python3 scripts/feide_scanner.py --uri ldap://dc01.dfo.no
 #
 # --realm (dfo.no) and --base (DC=DFO,DC=NO) are derived from the --uri host; pass them to override.
 #
 # one account only:
 #
-#   /usr/bin/python3 scripts/feide_check.py --uri ldap://dc01.dfo.no --account df1234
+#   /usr/bin/python3 scripts/feide_scanner.py --uri ldap://dc01.dfo.no --account df1234
 #
-# Assumption: Feide does not publish its mobile check; this script accepts only +47 followed by eight digits.
+# Phone numbers (mobile, telephoneNumber and otherMobile) must be in international format with no spaces:
+#   +47 followed by exactly eight digits for Norwegian numbers (+4792345678);
+#   + and a country code for other countries, at least three digits in all (+43123456789).
+# Sikt (Feide support, 2026-10-15): the Feide validator applies the Norwegian length check to +47 numbers
+# and to numbers with no country code; for other country codes it only requires three digits.
 # Assumption: norEduPersonLegalName is built from givenName plus sn, so its whitespace errors are reported under those two attributes.
 # Assumption: the required attribute list (cn, sn, givenName, displayName, eduPersonPrincipalName, mail) is not yet verified against the Feide information model.
 # The org unit checks only produce results against the proxy output, since AD holds no eduPerson attributes.
@@ -20,9 +24,13 @@
 # Active Directory checks, which only produce results against AD itself:
 #   disabled accounts are left out unless --include-disabled, since they never reach Feide;
 #   --account-pattern and --blocklist leave out accounts that are not people (NVI: vi[0-9]{4}, vi1576);
-#   a missing mobile is reported, since Feide two-factor needs it;
+#   accounts whose info (Notes) field contains "skjulmeg" ("hide me") are skipped, since they must
+#   not reach Feide; the AD administrator keeps the marker, so the accounts are not touched;
+#   accounts whose description contains "Ekstern bruker" (for example "Ekstern brukere (Renholdere)")
+#   are skipped, since external users must not log in to Feide;
+#   each skipped account is printed on a SKIPPED line with the reason, and skips do not count as errors;
+#   a missing mobile or telephoneNumber is reported, since both are filled when an account is created;
 #   displayName must be "Surname, Given" with the same names as sn and givenName;
-#   an enabled account whose info (Notes) field contains "skjulmeg" is reported as a possible leaver;
 #   an account with no lastLogonTimestamp newer than --stale-days is reported; people who only use
 #   Microsoft 365 in the cloud also show up here, so check before disabling anyone.
 #
@@ -61,8 +69,11 @@ FEIDE_CHECK_ORGUNIT_ATTR = "eduPersonOrgUnitDN"
 FEIDE_CHECK_PRIMARY_ORGUNIT_ATTR = "eduPersonPrimaryOrgUnitDN"
 FEIDE_CHECK_WHITESPACE_RE = re.compile(r"^\s|\s$|\s{2,}")
 FEIDE_CHECK_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
-FEIDE_CHECK_MOBILE_RE = re.compile(r"^\+47[0-9]{8}$")
+FEIDE_CHECK_NORWEGIAN_PHONE_PREFIX = "+47"
+FEIDE_CHECK_NORWEGIAN_PHONE_RE = re.compile(r"^\+47[0-9]{8}$")
+FEIDE_CHECK_INTERNATIONAL_PHONE_RE = re.compile(r"^\+[1-9][0-9]{2,}$")
 FEIDE_CHECK_HIDE_MARKER = "skjulmeg"
+FEIDE_CHECK_EXTERNAL_MARKER = "ekstern bruker"
 # lastLogonTimestamp counts 100 ns intervals since 1601-01-01 UTC.
 FEIDE_CHECK_FILETIME_EPOCH = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc)
 
@@ -167,8 +178,9 @@ def feide_check_entry(attrs, args):
             if FEIDE_CHECK_CONTROL_RE.search(value):
                 errors.append((name, "Control characters in attribute: " + name, value))
     for value in attrs.get("mobile", []):
-        if not FEIDE_CHECK_MOBILE_RE.match(value):
-            errors.append(("mobile", "mobile contains an invalid Norwegian phone number", value))
+        message = feide_check_phone(value)
+        if message:
+            errors.append(("mobile", "mobile " + message, value))
     for value in attrs.get("mail", []):
         if not value.isascii():
             errors.append(("mail", "Non-ASCII characters in mail", value))
@@ -180,6 +192,31 @@ def feide_check_entry(attrs, args):
         if not attrs.get(name.lower()):
             errors.append((name, "Missing required attribute: " + name, ""))
     return errors
+
+
+# Takes a phone number; returns None when it is +47 and eight digits, or +
+# and a country code with at least three digits in all; otherwise returns
+# what is wrong with it.
+def feide_check_phone(value):
+    if value.startswith(FEIDE_CHECK_NORWEGIAN_PHONE_PREFIX):
+        if FEIDE_CHECK_NORWEGIAN_PHONE_RE.match(value):
+            return None
+        return "contains an invalid Norwegian phone number (+47 and eight digits)"
+    if FEIDE_CHECK_INTERNATIONAL_PHONE_RE.match(value):
+        return None
+    return "is not in international format (+ and country code, no spaces)"
+
+
+# Takes the decoded attributes; returns why the account must not reach
+# Feide ("skjulmeg" in info, or "Ekstern bruker" in description), or None.
+def feide_check_excluded_reason(attrs):
+    for value in attrs.get("info", []):
+        if FEIDE_CHECK_HIDE_MARKER in value.lower():
+            return ("info", "Skipped: marked \"skjulmeg\" (hide me), must not reach Feide", value)
+    for value in attrs.get("description", []):
+        if FEIDE_CHECK_EXTERNAL_MARKER in value.lower():
+            return ("description", "Skipped: external user, must not log in to Feide", value)
+    return None
 
 
 # Takes the decoded attributes; returns True when the account is a person
@@ -202,7 +239,14 @@ def feide_check_filetime(value):
 def feide_check_ad(attrs, args):
     errors = []
     if not attrs.get("mobile"):
-        errors.append(("mobile", "Missing mobile (needed for two-factor authentication)", ""))
+        errors.append(("mobile", "Missing mobile", ""))
+    if not attrs.get("telephonenumber"):
+        errors.append(("telephoneNumber", "Missing telephoneNumber", ""))
+    for name in ("telephoneNumber", "otherMobile"):
+        for value in attrs.get(name.lower(), []):
+            message = feide_check_phone(value)
+            if message:
+                errors.append((name, name + " " + message, value))
     sn = (attrs.get("sn") or [""])[0]
     given = (attrs.get("givenname") or [""])[0]
     for value in attrs.get("displayname", []):
@@ -214,9 +258,6 @@ def feide_check_ad(attrs, args):
             errors.append(("displayName", "No space after the comma in displayName", value))
         if surname.strip() != sn.strip() or rest.strip() != given.strip():
             errors.append(("displayName", "displayName differs from sn and givenName", f"{value} (sn={sn!r}, givenName={given!r})"))
-    for value in attrs.get("info", []):
-        if FEIDE_CHECK_HIDE_MARKER in value.lower():
-            errors.append(("info", "Marked \"skjulmeg\" but still enabled", value))
     stamps = attrs.get("lastlogontimestamp", [])
     last = feide_check_filetime(stamps[0]) if stamps else None
     if last is None:
@@ -266,9 +307,10 @@ def feide_check_report(dn, attr, message, value, users):
 
 def feide_check_main(argv):
     args = feide_check_parse_args(argv)
-    attrs = [args.eppn_attr, args.uid_attr, "mobile", "info", "lastLogonTimestamp", FEIDE_CHECK_ORGUNIT_ATTR, FEIDE_CHECK_PRIMARY_ORGUNIT_ATTR]
+    attrs = [args.eppn_attr, args.uid_attr, "mobile", "telephoneNumber", "otherMobile", "info", "description", "lastLogonTimestamp", FEIDE_CHECK_ORGUNIT_ATTR, FEIDE_CHECK_PRIMARY_ORGUNIT_ATTR]
     attrs += [name for name in FEIDE_CHECK_WHITESPACE_ATTRS + FEIDE_CHECK_REQUIRED_ATTRS if name not in attrs]
     users = collections.defaultdict(set)
+    skipped = collections.Counter()
     seen = {args.eppn_attr: collections.defaultdict(set), args.uid_attr: collections.defaultdict(set)}
     cache = {}
     try:
@@ -276,6 +318,12 @@ def feide_check_main(argv):
         for dn, entry in feide_check_search(conn, args.base, args.filter, attrs, args.page_size):
             decoded = feide_check_decode(entry)
             if not feide_check_is_person(decoded, args):
+                continue
+            excluded = feide_check_excluded_reason(decoded)
+            if excluded:
+                attr, message, value = excluded
+                print(f"SKIPPED\t{dn}\t{attr}\t{message}\t{value!r}")
+                skipped[message] += 1
                 continue
             for attr, message, value in feide_check_entry(decoded, args) + feide_check_ad(decoded, args) + feide_check_orgunits(conn, decoded, cache):
                 feide_check_report(dn, attr, message, value, users)
@@ -293,6 +341,8 @@ def feide_check_main(argv):
                     feide_check_report(dn, name, "Duplicate value in attribute: " + name, value, users)
     for message in sorted(users):
         print(f"TOTAL\t{len(users[message])}\t{message}")
+    for message in sorted(skipped):
+        print(f"TOTAL\t{skipped[message]}\t{message}")
     return 1 if users else 0
 
 
