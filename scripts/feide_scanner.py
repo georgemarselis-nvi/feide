@@ -23,7 +23,7 @@
 #
 # Active Directory checks, which only produce results against AD itself:
 #   disabled accounts are left out unless --include-disabled, since they never reach Feide;
-#   --account-pattern and --blocklist leave out accounts that are not people (NVI: vi[0-9]{4}, vi1576);
+#   --account-pattern and --blocklist leave out accounts that are not people (for example ab[0-9]{4} or emp[0-9]{5}, and ab0001);
 #   accounts whose info (Notes) field contains "skjulmeg" ("hide me") are skipped, since they must
 #   not reach Feide; the AD administrator keeps the marker, so the accounts are not touched;
 #   accounts whose description contains "Ekstern bruker" (for example "Ekstern brukere (Renholdere)")
@@ -83,13 +83,13 @@ def feide_check_parse_args(argv):
     parser.add_argument("--uri", required=True, help="LDAP URI, for example ldap://dc01.dfo.no")
     parser.add_argument("--base", default=None, help="search base, for example DC=dfo,DC=no; derived from the realm when left out")
     parser.add_argument("--realm", default=None, help="Feide realm (schacHomeOrganization), for example dfo.no; derived from the --uri host when left out")
-    parser.add_argument("--account", action="append", default=[], help="check only this uid; repeat for more, for example --account vi1234 --account vi5678")
+    parser.add_argument("--account", action="append", default=[], help="check only this uid; repeat for more, for example --account ab1234 --account emp56789")
     parser.add_argument("--include-disabled", action="store_true", help="check disabled accounts too")
     parser.add_argument("--filter", default=None, help="raw LDAP search filter for special cases; overrides --account and --include-disabled")
     parser.add_argument("--eppn-attr", default="userPrincipalName", help="attribute that becomes eduPersonPrincipalName")
     parser.add_argument("--uid-attr", default="sAMAccountName", help="attribute that becomes uid")
-    parser.add_argument("--account-pattern", default=None, help="regular expression a uid must match in full to be checked, for example vi[0-9]{4}")
-    parser.add_argument("--blocklist", default="", help="space separated uids to leave out even if they match the pattern, for example vi1576")
+    parser.add_argument("--account-pattern", default=None, help="check only accounts whose uid (see --uid-attr) matches this regular expression in full, ignoring case; any pattern works, for example ab[0-9]{4} or emp[0-9]{5}; without it every account is checked")
+    parser.add_argument("--blocklist", default="", help="space separated uids to leave out even if they match the pattern, for example ab0001")
     parser.add_argument("--stale-days", type=int, default=180, help="report accounts with no logon in this many days")
     parser.add_argument("--page-size", type=int, default=500, help="paged search page size")
     args = parser.parse_args(argv)
@@ -108,7 +108,7 @@ def feide_check_parse_args(argv):
 
 
 # Takes an LDAP URI; returns the domain of its host with the first label
-# dropped (ldaps://dc02.vetinst.no -> vetinst.no), or None when the host
+# dropped (ldaps://dc01.dfo.no -> dfo.no), or None when the host
 # is an address or has fewer than three labels.
 def feide_check_realm_from_uri(uri):
     host = urllib.parse.urlsplit(uri).hostname or ""
