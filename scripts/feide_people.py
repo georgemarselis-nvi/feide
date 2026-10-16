@@ -69,6 +69,11 @@
 #   givenName                sn when Active Directory has no givenName
 #   norEduPersonLegalName    givenName plus sn
 #   eduPersonPrincipalName   userPrincipalName in lower case
+#   uid, mail                "å", "æ", "ø" and "ö" become "a", "ae", "o" and
+#                            "o" (and "Å", "Æ", "Ø", "Ö" become "A", "AE", "O",
+#                            "O"), since FEIDE takes ASCII only; any other
+#                            non-ASCII character is left as it is and logged
+#                            on a NONASCII line
 #   eduPersonAffiliation     constants from EDUPERSONAFFILIATION in .env
 #   eduPersonScopedAffiliation, schacHomeOrganization, eduPersonOrgDN
 #                            derived from DOMAIN and BASE_DN
@@ -118,6 +123,8 @@ FEIDE_PEOPLE_FILETIME_EPOCH: datetime.datetime = datetime.datetime(1601, 1, 1, t
 FEIDE_PEOPLE_FILETIME_NEVER: int = 0x7FFFFFFFFFFFFFFF
 FEIDE_PEOPLE_REQUIRED_ENV: tuple[str, ...] = ("FEIDE_PEOPLE_SOCKET", "FEIDE_PEOPLE_AD_CA", "AD_SERVER", "DOMAIN", "BASE_DN", "AD_BASE_DN", "EDUPERSONAFFILIATION", "SIKT_BIND_DN", "FEIDE_PEOPLE_ACCOUNT_PATTERN")
 FEIDE_PEOPLE_COMMANDS: tuple[str, ...] = ("SEARCH", "BIND", "UNBIND")
+# Norwegian letters, and ö, -> ASCII, for uid and mail, which FEIDE takes in ASCII only.
+FEIDE_PEOPLE_ASCII_MAP: dict[int, str] = str.maketrans({"å": "a", "æ": "ae", "ø": "o", "ö": "o", "Å": "A", "Æ": "AE", "Ø": "O", "Ö": "O"})
 # Longest request line accepted from slapd, so a broken peer cannot exhaust memory.
 FEIDE_PEOPLE_MAX_LINE: int = 65536
 
@@ -437,6 +444,18 @@ def feide_people_display_name(value: str) -> str:
     return given + " " + surname
 
 
+def feide_people_ascii(account: str, name: str, value: str) -> str:
+    """Takes the account, the attribute name and a value; returns the value
+    with "å", "æ", "ø" and "ö" (either case) turned into "a", "ae", "o" and
+    "o". Logs a
+    NONASCII line when non-ASCII characters remain, since FEIDE rejects
+    them."""
+    converted = value.translate(FEIDE_PEOPLE_ASCII_MAP)
+    if not converted.isascii():
+        feide_people_log("NONASCII account=%r attribute=%s value=%r" % (account, name, converted))
+    return converted
+
+
 def feide_people_first(attrs: AdAttrs, name: str) -> Optional[str]:
     """Takes attributes and a name; returns the first value, or None."""
     values = attrs.get(name, [])
@@ -447,9 +466,10 @@ def feide_people_build_entry(config: Config, ad: AdAttrs) -> Optional[tuple[str,
     """Takes the Active Directory attributes of one user; returns (DN, entry)
     with lower-case attribute keys, or None when the user has no
     sAMAccountName."""
-    uid = feide_people_first(ad, "sAMAccountName")
-    if uid is None:
+    account = feide_people_first(ad, "sAMAccountName")
+    if account is None:
         return None
+    uid = feide_people_ascii(account, "uid", account)
     entry: Entry = {"objectclass": list(FEIDE_PEOPLE_OBJECTCLASSES), "uid": [uid]}
     display = feide_people_first(ad, "displayName")
     if display is not None:
@@ -470,9 +490,10 @@ def feide_people_build_entry(config: Config, ad: AdAttrs) -> Optional[tuple[str,
     upn = feide_people_first(ad, "userPrincipalName")
     if upn is not None:
         entry["edupersonprincipalname"] = [upn.lower()]
-    for name in ("mail", "mobile"):
-        if ad.get(name):
-            entry[name] = list(ad[name])
+    if ad.get("mail"):
+        entry["mail"] = [feide_people_ascii(account, "mail", value) for value in ad["mail"]]
+    if ad.get("mobile"):
+        entry["mobile"] = list(ad["mobile"])
     entry["edupersonaffiliation"] = list(config["AFFILIATIONS"])
     entry["edupersonscopedaffiliation"] = [a + "@" + config["DOMAIN"] for a in config["AFFILIATIONS"]]
     entry["edupersonorgdn"] = [config["BASE_DN"]]
