@@ -24,15 +24,21 @@
 # Active Directory checks, which only produce results against AD itself:
 #   disabled accounts are left out unless --include-disabled, since they never reach Feide;
 #   --account-pattern and --blocklist leave out accounts that are not people (for example ab[0-9]{4} or emp[0-9]{5}, and ab0001);
-#   accounts whose info (Notes) field contains "skjulmeg" ("hide me") are skipped, since they must
+#   accounts whose info (Notes) field contains "skjulmeg" ("hide me") are reported, since they must
 #   not reach Feide; the AD administrator keeps the marker, so the accounts are not touched;
-#   accounts whose description contains "Ekstern bruker" (for example "Ekstern brukere (Renholdere)")
-#   are skipped, since external users must not log in to Feide;
-#   each skipped account is printed on a SKIPPED line with the reason, and skips do not count as errors;
+#   accounts whose description contains "Ekstern bruker" are reported, since external users must
+#   not log in to Feide; neither kind gets the other checks;
 #   a missing mobile or telephoneNumber is reported, since both are filled when an account is created;
 #   displayName must be "Surname, Given" with the same names as sn and givenName;
 #   an account with no lastLogonTimestamp newer than --stale-days is reported; people who only use
 #   Microsoft 365 in the cloud also show up here, so check before disabling anyone.
+#
+# Changes since the previous scan:
+#   every full scan saves its findings to --state (default /var/lib/feide/scanner-last.tsv) and
+#   compares them with the findings saved by the scan before it; a finding that is new prints on a
+#   NEW line and a finding that has gone prints on a GONE line, so support sees what changed;
+#   the first scan has nothing to compare with, so it prints no NEW or GONE lines;
+#   scans narrowed with --account or --filter neither read nor save the state file.
 #
 # Copyright (C) 2026 George Marselis <george.marselis@vetinst.no>
 #
@@ -52,6 +58,7 @@
 import argparse
 import collections
 import datetime
+import os
 import re
 import sys
 import urllib.parse
@@ -74,6 +81,7 @@ FEIDE_CHECK_NORWEGIAN_PHONE_RE = re.compile(r"^\+47[0-9]{8}$")
 FEIDE_CHECK_INTERNATIONAL_PHONE_RE = re.compile(r"^\+[1-9][0-9]{2,}$")
 FEIDE_CHECK_HIDE_MARKER = "skjulmeg"
 FEIDE_CHECK_EXTERNAL_MARKER = "ekstern bruker"
+FEIDE_CHECK_STATE_FILE = "/var/lib/feide/scanner-last.tsv"
 # lastLogonTimestamp counts 100 ns intervals since 1601-01-01 UTC.
 FEIDE_CHECK_FILETIME_EPOCH = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc)
 
@@ -86,6 +94,7 @@ def feide_check_parse_args(argv):
     parser.add_argument("--account", action="append", default=[], help="check only this uid; repeat for more, for example --account ab1234 --account emp56789")
     parser.add_argument("--include-disabled", action="store_true", help="check disabled accounts too")
     parser.add_argument("--filter", default=None, help="raw LDAP search filter for special cases; overrides --account and --include-disabled")
+    parser.add_argument("--state", default=FEIDE_CHECK_STATE_FILE, help=f"file that keeps the findings of the previous full scan, to print NEW and GONE lines; default {FEIDE_CHECK_STATE_FILE}")
     parser.add_argument("--eppn-attr", default="userPrincipalName", help="attribute that becomes eduPersonPrincipalName")
     parser.add_argument("--uid-attr", default="sAMAccountName", help="attribute that becomes uid")
     parser.add_argument("--account-pattern", default=None, help="check only accounts whose uid (see --uid-attr) matches this regular expression in full, ignoring case; any pattern works, for example ab[0-9]{4} or emp[0-9]{5}; without it every account is checked")
@@ -96,6 +105,7 @@ def feide_check_parse_args(argv):
     args.account_re = re.compile(args.account_pattern, re.IGNORECASE) if args.account_pattern else None
     args.blocked = {name.lower() for name in args.blocklist.split()}
     args.now = datetime.datetime.now(datetime.timezone.utc)
+    args.full_scan = not args.account and args.filter is None
     if args.realm is None:
         args.realm = feide_check_realm_from_uri(args.uri)
         if args.realm is None:
@@ -212,10 +222,10 @@ def feide_check_phone(value):
 def feide_check_excluded_reason(attrs):
     for value in attrs.get("info", []):
         if FEIDE_CHECK_HIDE_MARKER in value.lower():
-            return ("info", "Skipped: marked \"skjulmeg\" (hide me), must not reach Feide", value)
+            return ("info", "Marked \"skjulmeg\" (hide me), must not reach Feide", value)
     for value in attrs.get("description", []):
         if FEIDE_CHECK_EXTERNAL_MARKER in value.lower():
-            return ("description", "Skipped: external user, must not log in to Feide", value)
+            return ("description", "External user, must not log in to Feide", value)
     return None
 
 
@@ -300,9 +310,32 @@ def feide_check_orgunits(conn, attrs, cache):
     return errors
 
 
-def feide_check_report(dn, attr, message, value, users):
-    print(f"{dn}\t{attr}\t{message}\t{value!r}")
+def feide_check_report(dn, attr, message, value, users, findings):
+    line = f"{dn}\t{attr}\t{message}\t{value!r}"
+    print(line)
     users[message].add(dn)
+    findings.add(line)
+
+
+# Takes the state file path; returns the finding lines it holds, or None
+# when there is no previous scan.
+def feide_check_load_state(path):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return {line.rstrip("\n") for line in handle if line.strip()}
+    except FileNotFoundError:
+        return None
+
+
+# Takes the state file path and the finding lines; writes them through a
+# temporary file, so a failed run never leaves half a state file behind.
+def feide_check_save_state(path, findings):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    temporary = path + ".tmp"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        for line in sorted(findings):
+            handle.write(line + "\n")
+    os.replace(temporary, path)
 
 
 def feide_check_main(argv):
@@ -310,7 +343,7 @@ def feide_check_main(argv):
     attrs = [args.eppn_attr, args.uid_attr, "mobile", "telephoneNumber", "otherMobile", "info", "description", "lastLogonTimestamp", FEIDE_CHECK_ORGUNIT_ATTR, FEIDE_CHECK_PRIMARY_ORGUNIT_ATTR]
     attrs += [name for name in FEIDE_CHECK_WHITESPACE_ATTRS + FEIDE_CHECK_REQUIRED_ATTRS if name not in attrs]
     users = collections.defaultdict(set)
-    skipped = collections.Counter()
+    findings = set()
     seen = {args.eppn_attr: collections.defaultdict(set), args.uid_attr: collections.defaultdict(set)}
     cache = {}
     try:
@@ -322,11 +355,10 @@ def feide_check_main(argv):
             excluded = feide_check_excluded_reason(decoded)
             if excluded:
                 attr, message, value = excluded
-                print(f"SKIPPED\t{dn}\t{attr}\t{message}\t{value!r}")
-                skipped[message] += 1
+                feide_check_report(dn, attr, message, value, users, findings)
                 continue
             for attr, message, value in feide_check_entry(decoded, args) + feide_check_ad(decoded, args) + feide_check_orgunits(conn, decoded, cache):
-                feide_check_report(dn, attr, message, value, users)
+                feide_check_report(dn, attr, message, value, users, findings)
             for name, index in seen.items():
                 for value in decoded.get(name.lower(), []):
                     index[value.lower()].add(dn)
@@ -338,11 +370,25 @@ def feide_check_main(argv):
         for value, dns in sorted(index.items()):
             if len(dns) > 1:
                 for dn in sorted(dns):
-                    feide_check_report(dn, name, "Duplicate value in attribute: " + name, value, users)
+                    feide_check_report(dn, name, "Duplicate value in attribute: " + name, value, users, findings)
     for message in sorted(users):
         print(f"TOTAL\t{len(users[message])}\t{message}")
-    for message in sorted(skipped):
-        print(f"TOTAL\t{skipped[message]}\t{message}")
+    if args.full_scan:
+        previous = feide_check_load_state(args.state)
+        if previous is not None:
+            new = sorted(findings - previous)
+            gone = sorted(previous - findings)
+            for line in new:
+                print(f"NEW\t{line}")
+            for line in gone:
+                print(f"GONE\t{line}")
+            print(f"TOTAL\t{len(new)}\tNew since the previous scan")
+            print(f"TOTAL\t{len(gone)}\tGone since the previous scan")
+        try:
+            feide_check_save_state(args.state, findings)
+        except OSError as error:
+            print(f"feide_check: cannot save {args.state}: {error}", file=sys.stderr)
+            return 2
     return 1 if users else 0
 
 
