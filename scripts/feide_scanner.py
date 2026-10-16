@@ -43,13 +43,24 @@
 #   a missing mobile or telephoneNumber is reported, since both are filled when an account is created;
 #   displayName must be "Surname, Given" with the same names as sn and givenName;
 #   an account with no lastLogonTimestamp newer than --stale-days is reported; people who only use
-#   Microsoft 365 in the cloud also show up here, so check before disabling anyone.
+#   Microsoft 365 in the cloud also show up here, so check before disabling anyone;
+#   an enabled account whose accountExpires date has passed is reported.
 #
 # --account-pattern and --blocklist leave out accounts that are not people (for example ab[0-9]{4}
 # or emp[0-9]{5}, and ab0001), on either server type.
 #
 # Output: the findings are collected over the whole search and printed at the end, sorted by DN,
 # then one TOTAL line per message.
+#
+# Exceptions: findings a person has accepted are listed in --exceptions (default
+# /etc/feide/scanner-exceptions.tsv), one per line, tab separated:
+#
+#   <uid>	<attribute or *>	<until YYYY-MM-DD>	<reason>
+#
+# A finding for that uid and attribute (* for every attribute) prints on an EXCEPTED line with the
+# reason, and stays out of the totals, the NEW and GONE lines, the state file and the exit code.
+# From the day after the until date the exception no longer applies and the finding returns as NEW.
+# Lines starting with # and empty lines are ignored. A missing file means no exceptions.
 #
 # Changes since the previous scan:
 #   every full scan saves its findings to the state file and compares them with the findings saved
@@ -94,8 +105,10 @@ from ldap.controls import SimplePagedResultsControl
 Attrs = dict[str, list[str]]
 # One problem found: (attribute, message, value).
 Problem = tuple[str, str, str]
-# One reported finding: (DN, attribute, message, value).
-Finding = tuple[str, str, str, str]
+# One reported finding: (DN, uid, attribute, message, value).
+Finding = tuple[str, str, str, str, str]
+# Accepted findings: (lower-case uid, attribute or *) -> (until date, reason).
+Exceptions = dict[tuple[str, str], tuple[datetime.date, str]]
 
 FEIDE_CHECK_WHITESPACE_ATTRS: tuple[str, ...] = ("cn", "displayName", "givenName", "mail", "sn", "postalAddress")
 FEIDE_CHECK_SINGLE_ATTRS: tuple[str, ...] = ("displayName", "givenName", "sn")
@@ -116,6 +129,9 @@ FEIDE_CHECK_AD_CAPABILITY: str = "1.2.840.113556.1.4.800"
 FEIDE_CHECK_SERVER_AD: str = "ad"
 FEIDE_CHECK_SERVER_OPENLDAP: str = "openldap"
 FEIDE_CHECK_STATE_DIR: str = "/var/lib/feide"
+FEIDE_CHECK_EXCEPTIONS_FILE: str = "/etc/feide/scanner-exceptions.tsv"
+# accountExpires holds this value, or 0, when the account never expires.
+FEIDE_CHECK_FILETIME_NEVER: int = 0x7FFFFFFFFFFFFFFF
 # Defaults per server type.
 FEIDE_CHECK_PROFILES: dict[str, dict[str, str]] = {
     FEIDE_CHECK_SERVER_AD: {
@@ -144,6 +160,7 @@ def feide_check_parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--include-disabled", action="store_true", help="Active Directory only: check disabled accounts too")
     parser.add_argument("--filter", default=None, help="raw LDAP search filter for special cases; overrides --account and --include-disabled")
     parser.add_argument("--state", default=None, help=f"file that keeps the findings of the previous full scan, to print NEW and GONE lines; default {FEIDE_CHECK_STATE_DIR}/scanner-last-<server type>.tsv")
+    parser.add_argument("--exceptions", default=FEIDE_CHECK_EXCEPTIONS_FILE, help=f"file of accepted findings, one per line: uid, attribute or *, until date (YYYY-MM-DD) and reason, tab separated; default {FEIDE_CHECK_EXCEPTIONS_FILE}")
     parser.add_argument("--eppn-attr", default=None, help="attribute that becomes eduPersonPrincipalName; default userPrincipalName on Active Directory, eduPersonPrincipalName on OpenLDAP")
     parser.add_argument("--uid-attr", default=None, help="attribute that becomes uid; default sAMAccountName on Active Directory, uid on OpenLDAP")
     parser.add_argument("--account-pattern", default=None, help="check only accounts whose uid (see --uid-attr) matches this regular expression in full, ignoring case; any pattern works, for example ab[0-9]{4} or emp[0-9]{5}; without it every account is checked")
@@ -161,7 +178,51 @@ def feide_check_parse_args(argv: list[str]) -> argparse.Namespace:
             parser.error(f"cannot derive the realm from --uri {args.uri}; pass --realm")
     if args.base is None:
         args.base = ",".join("DC=" + label.upper() for label in args.realm.split("."))
+    try:
+        args.excepted = feide_check_load_exceptions(args.exceptions)
+    except ValueError as error:
+        parser.error(str(error))
     return args
+
+
+def feide_check_load_exceptions(path: str) -> Exceptions:
+    """Takes the exceptions file path; returns the accepted findings it lists,
+    or none when the file does not exist. Raises ValueError, naming the file
+    and line, for a line without four tab separated fields or with a date
+    that is not YYYY-MM-DD."""
+    exceptions: Exceptions = {}
+    try:
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except FileNotFoundError:
+        return exceptions
+    for number, line in enumerate(lines, start=1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        fields = line.split("\t")
+        if len(fields) != 4 or not all(field.strip() for field in fields):
+            raise ValueError(f"{path} line {number}: expected uid, attribute or *, until date and reason, tab separated")
+        uid, attr, until, reason = (field.strip() for field in fields)
+        try:
+            date = datetime.date.fromisoformat(until)
+        except ValueError:
+            raise ValueError(f"{path} line {number}: until date {until!r} is not YYYY-MM-DD") from None
+        exceptions[(uid.lower(), attr.lower())] = (date, reason)
+    return exceptions
+
+
+def feide_check_exception(finding: Finding, args: argparse.Namespace) -> Optional[str]:
+    """Takes a finding; returns the reason when an exception for its uid and
+    attribute, or for its uid and *, is still in force today, otherwise
+    None."""
+    _, uid, attr, _, _ = finding
+    today = args.now.date()
+    for key in ((uid.lower(), attr.lower()), (uid.lower(), "*")):
+        if key in args.excepted:
+            until, reason = args.excepted[key]
+            if today <= until:
+                return reason
+    return None
 
 
 def feide_check_realm_from_uri(uri: str) -> Optional[str]:
@@ -326,10 +387,11 @@ def feide_check_is_person(attrs: Attrs, args: argparse.Namespace) -> bool:
 
 
 def feide_check_filetime(value: str) -> Optional[datetime.datetime]:
-    """Takes a lastLogonTimestamp value; returns a UTC datetime, or None
-    for 0."""
+    """Takes a lastLogonTimestamp or accountExpires value; returns a UTC
+    datetime, or None for 0 and for the largest value, which both mean
+    never."""
     ticks = int(value)
-    if ticks <= 0:
+    if ticks <= 0 or ticks >= FEIDE_CHECK_FILETIME_NEVER:
         return None
     return FEIDE_CHECK_FILETIME_EPOCH + datetime.timedelta(microseconds=ticks // 10)
 
@@ -337,7 +399,8 @@ def feide_check_filetime(value: str) -> Optional[datetime.datetime]:
 def feide_check_ad(attrs: Attrs, args: argparse.Namespace) -> list[Problem]:
     """Takes the decoded attributes of an Active Directory account; returns
     the problems that only make sense against Active Directory: phone
-    fields, the "Surname, Given" displayName and the last logon."""
+    fields, the "Surname, Given" displayName, the last logon and an
+    expiry date that has passed."""
     errors: list[Problem] = []
     if not attrs.get("mobile"):
         errors.append(("mobile", "Missing mobile", ""))
@@ -365,6 +428,10 @@ def feide_check_ad(attrs: Attrs, args: argparse.Namespace) -> list[Problem]:
         errors.append(("lastLogonTimestamp", "Never logged on to on-premises Active Directory", ""))
     elif (args.now - last).days > args.stale_days:
         errors.append(("lastLogonTimestamp", f"No logon to on-premises Active Directory in {args.stale_days} days", last.date().isoformat()))
+    expires = attrs.get("accountexpires", [])
+    expiry = feide_check_filetime(expires[0]) if expires else None
+    if expiry is not None and expiry <= args.now:
+        errors.append(("accountExpires", "Account expired but still enabled", expiry.date().isoformat()))
     return errors
 
 
@@ -407,8 +474,9 @@ def feide_check_orgunits(conn: ldap.ldapobject.LDAPObject, attrs: Attrs, cache: 
 
 
 def feide_check_format(finding: Finding) -> str:
-    """Takes a finding; returns it as one tab separated output line."""
-    dn, attr, message, value = finding
+    """Takes a finding; returns it as one tab separated output line: DN,
+    attribute, message and value."""
+    dn, _, attr, message, value = finding
     return f"{dn}\t{attr}\t{message}\t{value!r}"
 
 
@@ -439,24 +507,27 @@ def feide_check_scan(conn: ldap.ldapobject.LDAPObject, args: argparse.Namespace)
     accounts. Nothing is printed here."""
     attrs = [args.eppn_attr, args.uid_attr, "mobile", FEIDE_CHECK_ORGUNIT_ATTR, FEIDE_CHECK_PRIMARY_ORGUNIT_ATTR]
     if args.is_ad:
-        attrs += ["telephoneNumber", "otherMobile", "info", "description", "lastLogonTimestamp"]
+        attrs += ["telephoneNumber", "otherMobile", "info", "description", "lastLogonTimestamp", "accountExpires"]
     attrs += [name for name in FEIDE_CHECK_WHITESPACE_ATTRS + FEIDE_CHECK_REQUIRED_ATTRS if name not in attrs]
     findings: set[Finding] = set()
     seen: dict[str, collections.defaultdict[str, set[str]]] = {args.eppn_attr: collections.defaultdict(set), args.uid_attr: collections.defaultdict(set)}
     cache: dict[str, bool] = {}
+    uids: dict[str, str] = {}
     for dn, entry in feide_check_search(conn, args.base, args.filter, attrs, args.page_size):
         decoded = feide_check_decode(entry)
         if not feide_check_is_person(decoded, args):
             continue
+        uid = (decoded.get(args.uid_attr.lower()) or [""])[0]
+        uids[dn] = uid
         excluded = feide_check_excluded_reason(decoded) if args.is_ad else None
         if excluded:
-            findings.add((dn,) + excluded)
+            findings.add((dn, uid) + excluded)
             continue
         problems = feide_check_entry(decoded, args) + feide_check_orgunits(conn, decoded, cache)
         if args.is_ad:
             problems += feide_check_ad(decoded, args)
         for problem in problems:
-            findings.add((dn,) + problem)
+            findings.add((dn, uid) + problem)
         for name, index in seen.items():
             for value in decoded.get(name.lower(), []):
                 index[value.lower()].add(dn)
@@ -464,23 +535,38 @@ def feide_check_scan(conn: ldap.ldapobject.LDAPObject, args: argparse.Namespace)
         for value, dns in index.items():
             if len(dns) > 1:
                 for dn in dns:
-                    findings.add((dn, name, "Duplicate value in attribute: " + name, value))
+                    findings.add((dn, uids[dn], name, "Duplicate value in attribute: " + name, value))
     return findings
 
 
 def feide_check_report(findings: set[Finding], args: argparse.Namespace) -> int:
-    """Takes all findings and the parsed arguments; prints them sorted, one
-    TOTAL line per message and, on a full scan, the NEW and GONE lines
-    against the state file, which it then replaces. Returns the exit code:
+    """Takes all findings and the parsed arguments; prints the findings
+    covered by an exception on EXCEPTED lines, the rest sorted, one TOTAL
+    line per message and, on a full scan, the NEW and GONE lines against
+    the state file, which it then replaces. Excepted findings stay out of
+    the totals, the state file and the exit code. Returns the exit code:
     0 for no findings, 1 for findings, 2 when the state file cannot be
     saved."""
+    excepted: list[tuple[Finding, str]] = []
+    open_findings: set[Finding] = set()
+    for finding in findings:
+        reason = feide_check_exception(finding, args)
+        if reason is None:
+            open_findings.add(finding)
+        else:
+            excepted.append((finding, reason))
+    findings = open_findings
     for finding in sorted(findings):
         print(feide_check_format(finding))
+    for finding, reason in sorted(excepted):
+        print(f"EXCEPTED\t{feide_check_format(finding)}\t{reason}")
     users: collections.defaultdict[str, set[str]] = collections.defaultdict(set)
-    for dn, _, message, _ in findings:
+    for dn, _, _, message, _ in findings:
         users[message].add(dn)
     for message in sorted(users):
         print(f"TOTAL\t{len(users[message])}\t{message}")
+    if excepted:
+        print(f"TOTAL\t{len(excepted)}\tExcepted")
     if args.full_scan:
         lines = {feide_check_format(finding) for finding in findings}
         previous = feide_check_load_state(args.state)

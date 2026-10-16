@@ -63,6 +63,14 @@ Directory only.
 18. An account never logged on, or with no logon in --stale-days
     (default 180), is reported. People who only use Microsoft 365 in
     the cloud show up here too, so check before disabling anyone.
+19. An enabled account whose accountExpires date has passed is
+    reported, since it still reaches Feide.
+
+## Exceptions
+
+A finding a person has accepted can be listed in the exceptions file
+with a reason and an until date; see feide_scanner.md. It is then
+reported as EXCEPTED instead of as a finding, until that date.
 
 ## Which accounts are people
 

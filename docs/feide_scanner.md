@@ -15,6 +15,8 @@ It only reads. It never changes the directory.
   directory. The scanner binds with SASL GSSAPI only.
 - Write access to /var/lib/feide for the state file, or --state
   pointing somewhere writable.
+- Read access to /etc/feide/scanner-exceptions.tsv when exceptions are
+  used, or --exceptions pointing at the file.
 
 ## Running it
 
@@ -84,6 +86,7 @@ On Active Directory only:
 - lastLogonTimestamp: never logged on, or no logon in --stale-days
   (default 180). People who only use Microsoft 365 in the cloud show up
   here too, so check before disabling anyone.
+- accountExpires: an enabled account whose expiry date has passed.
 
 --account-pattern and --blocklist leave out accounts that are not
 people (shared mailboxes, rooms, admin and service accounts) on either
@@ -99,6 +102,31 @@ end, sorted, one tab separated line each:
 Then one line per message with the number of accounts it applies to:
 
     TOTAL	<count>	<message>
+
+## Exceptions
+
+Findings a person has accepted, for example while waiting on someone's
+reply, go in /etc/feide/scanner-exceptions.tsv (or --exceptions), one
+per line, tab separated:
+
+    <uid>	<attribute or *>	<until YYYY-MM-DD>	<reason>
+
+For example:
+
+    ab1234	mobile	2026-11-30	foreign number, waiting on the user
+
+A finding for that uid and attribute (* for every attribute of the
+account) prints on an EXCEPTED line with the reason:
+
+    EXCEPTED	<DN>	<attribute>	<message>	<value>	<reason>
+    TOTAL	<count>	Excepted
+
+Excepted findings stay out of the other totals, the NEW and GONE lines,
+the state file and the exit code. From the day after the until date the
+exception no longer applies and the finding comes back as NEW, so no
+exception lasts for ever without someone renewing it. Lines starting
+with # and empty lines are ignored; a missing file means no exceptions.
+A malformed line stops the scanner with the file name and line number.
 
 ## Changes since the previous scan
 
@@ -118,7 +146,7 @@ of one account never replaces the baseline.
 
 ## Exit codes
 
-- 0: no findings.
+- 0: no findings, or only excepted ones.
 - 1: findings.
 - 2: an LDAP error, or the state file could not be saved.
 
