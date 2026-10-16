@@ -100,7 +100,10 @@ This list has two halves:
     - norEduPersonLegalName
     - sn
     - postalAddress.
-  - mobile holds a valid Norwegian number.
+  - mobile holds a valid phone number in international format. A number with
+    +47, or with no country code, must be a valid Norwegian number (+47 and
+    eight digits); a number with another country code only needs at least
+    three digits (Sikt, 15.10.2026).
 - Browser access: any client network that filters outbound web traffic by
   allowlist must permit
   - idp.feide.no
@@ -123,11 +126,23 @@ Active Directory, so the rules below are Active Directory rules, not proxy rules
   person the old person's access. The four-digit VI pool holds 10000 numbers and
   about 3000 are consumed. The pool will have to be widened before the number scheme
   runs out.
-- Accounts that are disabled in Active Directory must not appear in FEIDE.
-  Otherwise, disabling an account stops the person from logging in at
-  NVI but leaves them logging in to FEIDE services with the same credentials.
-  The OpenLDAP server should use an LDAP filter which will leave disabled 
-  accounts out. 
+- Only people reach FEIDE. An account is a person when its sAMAccountName
+  matches FEIDE_PEOPLE_ACCOUNT_PATTERN and is not on
+  FEIDE_PEOPLE_ACCOUNT_BLOCKLIST; shared mailboxes, rooms, instruments, admin
+  and service accounts do not.
+- These accounts must not appear in FEIDE either, even when they are people:
+  - disabled accounts. Otherwise, disabling an account stops the person from
+    logging in at NVI but leaves them logging in to FEIDE services with the
+    same credentials;
+  - accounts whose info (Notes) field contains "skjulmeg" ("hide me"). The
+    Active Directory administrator keeps the marker on purpose;
+  - accounts whose description contains "Ekstern bruker". External users must
+    not log in to FEIDE;
+  - accounts whose accountExpires date has passed but which are still enabled.
+
+  The proxy leaves them out of every reply. A bind as one of them is refused
+  with invalid credentials, as if the account did not exist, and the real
+  reason is logged on a FILTERED line.
 - The mail attribute in Active Directory is the authoritative source for an
   email address of a person. NVI runs hybrid Exchange and the sync only goes one
   way, local to Entra ID. The consequence is that an address added in the cloud
@@ -135,9 +150,10 @@ Active Directory, so the rules below are Active Directory rules, not proxy rules
   outputs, employees will have to use their viXXXX@vetinst.no address, unless
   there is a way to mirror aliases. For example, under the current setup, 
   george.marselis@vetinst.no could not be used as a FEIDE sign-in address.
-- The mobile attribute holds a phone number using the +47XXXXXXXX form, exclusively.
-  The FEIDE validator rejects anything else. There is already one user who is
-  flagged in the FEIDE customer portal.
+- The mobile and telephoneNumber attributes are both filled in when an account
+  is created, in international format with no spaces: +47 and eight digits for
+  a Norwegian number, + and the country code for a foreign one. Secondary
+  numbers go in otherMobile, in the same format.
 - When the validator rules above are broken, we fix the data in Active Directory.
   We should not have workarounds in the proxy.
 - Active Directory carries no eduPerson or inetOrgPerson classes. In NVI AD, cn 
@@ -147,6 +163,9 @@ Active Directory, so the rules below are Active Directory rules, not proxy rules
   change their values, so slapd hands every request under ou=people to a small
   Python program (scripts/feide_people.py, over OpenLDAP's back-sock) which
   reads Active Directory and builds the eduPerson and inetOrgPerson entry.
+  The same program lowercases eduPersonPrincipalName and turns "å", "æ", "ø"
+  and "ö" in uid and mail into "a", "ae", "o" and "o", since FEIDE takes those
+  two in ASCII only.
 
 ### Implementation
 
