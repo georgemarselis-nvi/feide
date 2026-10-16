@@ -399,8 +399,12 @@ def feide_people_filter_substring(value: str, initial: str, middle: list[str], f
 
 def feide_people_filter_to_ad(tree: FilterTree) -> Optional[str]:
     """Takes a parsed filter; returns an Active Directory filter that selects
-    a superset of the matches, or None for no narrowing."""
+    a superset of the matches, or None for no narrowing. >=, <= and ~= are
+    never narrowed: Active Directory compares them differently from this
+    program, so under a ! the narrowing could drop entries that match."""
     kind = tree[0]
+    if kind in ("ge", "le", "approx"):
+        return None
     if kind == "and":
         parts = [p for p in (feide_people_filter_to_ad(child) for child in tree[1]) if p is not None]
         if not parts:
@@ -424,8 +428,7 @@ def feide_people_filter_to_ad(tree: FilterTree) -> Optional[str]:
     if kind == "sub":
         pieces = [feide_people_filter_escape(tree[2])] + [feide_people_filter_escape(p) for p in tree[3]] + [feide_people_filter_escape(tree[4])]
         return "(" + ad_attr + "=" + "*".join(pieces) + ")"
-    operator = {"eq": "=", "approx": "=", "ge": ">=", "le": "<="}[kind]
-    return "(" + ad_attr + operator + feide_people_filter_escape(tree[2]) + ")"
+    return "(" + ad_attr + "=" + feide_people_filter_escape(tree[2]) + ")"
 
 
 # ---------------------------------------------------------------------------
