@@ -82,10 +82,13 @@
 #                            "urn:mace:feide.no:auth:method:sms +4792345678";
 #                            every number is passed on as Active Directory
 #                            holds it, so a bad one fails loudly at login
+#   norEduPersonServiceAuthnLevel
+#                            the same for everyone: two-factor on every
+#                            service, "urn:mace:feide.no:spid:all
+#                            urn:mace:feide.no:auth:level:fad08:3"
 #
 # Not returned: userPassword (never), norEduPersonNIN (the organisation may
-# not hold it), norEduPersonServiceAuthnLevel (optional per-user override of
-# the two-factor settings in the FEIDE customer portal, not used).
+# not hold it).
 
 from __future__ import annotations
 
@@ -133,6 +136,9 @@ FEIDE_PEOPLE_ASCII_MAP: dict[int, str] = str.maketrans({"å": "a", "æ": "ae", "
 # FEIDE's two-factor method by text message, followed by the number
 # (docs.feide.no/reference/mfa/technical_reqs.html).
 FEIDE_PEOPLE_SMS_METHOD: str = "urn:mace:feide.no:auth:method:sms"
+# Two-factor for every person on every service, at level 3, the only level
+# FEIDE supports today.
+FEIDE_PEOPLE_SERVICE_AUTHN_LEVEL: str = "urn:mace:feide.no:spid:all urn:mace:feide.no:auth:level:fad08:3"
 # Longest request line accepted from slapd, so a broken peer cannot exhaust memory.
 FEIDE_PEOPLE_MAX_LINE: int = 65536
 
@@ -519,6 +525,7 @@ def feide_people_build_entry(config: Config, ad: AdAttrs) -> Optional[tuple[str,
     entry["edupersonscopedaffiliation"] = [a + "@" + config["DOMAIN"] for a in config["AFFILIATIONS"]]
     entry["edupersonorgdn"] = [config["BASE_DN"]]
     entry["schachomeorganization"] = [config["DOMAIN"]]
+    entry["noredupersonserviceauthnlevel"] = [FEIDE_PEOPLE_SERVICE_AUTHN_LEVEL]
     return "uid=" + ldap.dn.escape_dn_chars(uid) + "," + config["PEOPLE_DN"], entry
 
 
@@ -535,6 +542,7 @@ FEIDE_PEOPLE_ATTR_NAMES: dict[str, str] = {
     "edupersonaffiliation": "eduPersonAffiliation", "edupersonscopedaffiliation": "eduPersonScopedAffiliation",
     "edupersonorgdn": "eduPersonOrgDN", "schachomeorganization": "schacHomeOrganization", "ou": "ou",
     "noredupersonauthnmethod": "norEduPersonAuthnMethod",
+    "noredupersonserviceauthnlevel": "norEduPersonServiceAuthnLevel",
 }
 
 
