@@ -29,6 +29,10 @@
 #
 # Nothing here is interactive and nothing here writes a secret: the
 # keytab, the certificate and the key are mounted in by the host.
+#
+# The container starts as root only to load the rate limit on 636
+# (ratelimit.nft, which needs NET_ADMIN: docker run --cap-add NET_ADMIN),
+# then runs itself again as the ldap user for everything else.
 
 set -eu
 
@@ -42,6 +46,8 @@ ENTRYPOINT_ORG_LDIF=/etc/openldap/org.ldif
 ENTRYPOINT_DB_DIR=/var/lib/ldap
 ENTRYPOINT_PEOPLE=/usr/local/bin/feide_people.py
 ENTRYPOINT_PEOPLE_SOCKET=/var/run/openldap/feide-people.sock
+ENTRYPOINT_RATELIMIT=/etc/nftables/feide-ratelimit.nft
+ENTRYPOINT_SELF=/usr/local/bin/entrypoint.sh
 
 entrypoint_fail() {
 	echo "entrypoint: $1" >&2
@@ -152,7 +158,16 @@ entrypoint_start_people() {
 	entrypoint_fail "feide_people.py did not open $ENTRYPOINT_PEOPLE_SOCKET"
 }
 
+# As root: loads the rate limit on 636, then runs this script again as
+# ldap. Fails when the rule cannot be loaded, since a proxy without the
+# limit must not start quietly.
+entrypoint_ratelimit() {
+	/usr/sbin/nft -f "$ENTRYPOINT_RATELIMIT" || entrypoint_fail "could not load $ENTRYPOINT_RATELIMIT; start the container with --cap-add NET_ADMIN"
+	exec /usr/sbin/runuser -u ldap -- "$ENTRYPOINT_SELF" "$@"
+}
+
 entrypoint_main() {
+	[ "$(/usr/bin/id -u)" -eq 0 ] && entrypoint_ratelimit "$@"
 	entrypoint_load_env
 	entrypoint_derive
 	entrypoint_check_mounts

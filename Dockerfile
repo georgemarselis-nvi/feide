@@ -24,6 +24,10 @@
 #   /etc/krb5.keytab           machine keytab from scripts/join-domain.sh
 #   /etc/openldap/certs/       certificate and key from certbot on the host
 #
+# The container must be started with --cap-add NET_ADMIN: the entrypoint
+# starts as root, loads the rate limit on 636 (config/ratelimit.nft, at
+# most 100 new connections a second) and then runs as the ldap user.
+#
 # The entrypoint reads .env, fills the slapd.conf and organisation
 # entry templates, prints the settings it is running with, starts
 # feide_people.py (which answers for ou=people over back-sock) and
@@ -40,7 +44,7 @@ LABEL org.opencontainers.image.source="https://github.com/georgemarselis-nvi/fei
 LABEL org.opencontainers.image.licenses="GPL-3.0-or-later"
 
 RUN /usr/bin/dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
-RUN /usr/bin/dnf install -y openldap-servers openldap-clients cyrus-sasl-gssapi krb5-workstation gettext python3 python3-ldap
+RUN /usr/bin/dnf install -y openldap-servers openldap-clients cyrus-sasl-gssapi krb5-workstation gettext python3 python3-ldap nftables util-linux
 RUN /usr/bin/dnf clean all
 
 # Kerberos: slapd runs as the ldap user and binds to Active Directory
@@ -68,6 +72,7 @@ COPY schema/52-noredu.ldif /etc/openldap/schema/52-noredu.ldif
 COPY schema/noredu.schema /etc/openldap/schema/noredu.schema
 COPY config/slapd.conf.template /etc/openldap/slapd.conf.template
 COPY schema/org.ldif.template /etc/openldap/org.ldif.template
+COPY config/ratelimit.nft /etc/nftables/feide-ratelimit.nft
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY scripts/feide_people.py /usr/local/bin/feide_people.py
 
@@ -83,6 +88,6 @@ VOLUME ["/etc/feide", "/etc/openldap/certs"]
 
 EXPOSE 636
 
-USER ldap
-
+# No USER line: the entrypoint starts as root to load the rate limit and
+# drops to ldap itself.
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

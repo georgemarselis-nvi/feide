@@ -1,0 +1,29 @@
+# ratelimit.nft
+#
+# Loaded by entrypoint.sh at container start, before it drops to the
+# ldap user. At most 100 new connections a second reach LDAPS on 636;
+# the rest are dropped while the flood lasts, and the client's TCP stack
+# retries them. Below 100 a second nothing is touched, so the limit lifts
+# by itself when the traffic quiets down.
+#
+# Copyright (C) 2026 George Marselis <george.marselis@vetinst.no>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+table inet feide_ratelimit {
+    chain input {
+        type filter hook input priority 0; policy accept;
+        tcp dport 636 ct state new limit rate over 100/second burst 100 packets drop
+    }
+}
