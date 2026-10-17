@@ -77,10 +77,15 @@
 #   eduPersonAffiliation     constants from EDUPERSONAFFILIATION in .env
 #   eduPersonScopedAffiliation, schacHomeOrganization, eduPersonOrgDN
 #                            derived from DOMAIN and BASE_DN
+#   norEduPersonAuthnMethod  one SMS method per mobile number, for FEIDE's
+#                            two-factor login by text message:
+#                            "urn:mace:feide.no:auth:method:sms +4792345678";
+#                            every number is passed on as Active Directory
+#                            holds it, so a bad one fails loudly at login
 #
 # Not returned: userPassword (never), norEduPersonNIN (the organisation may
-# not hold it), norEduPersonAuthnMethod and norEduPersonServiceAuthnLevel
-# (MFA mechanics not settled yet).
+# not hold it), norEduPersonServiceAuthnLevel (optional per-user override of
+# the two-factor settings in the FEIDE customer portal, not used).
 
 from __future__ import annotations
 
@@ -125,6 +130,9 @@ FEIDE_PEOPLE_REQUIRED_ENV: tuple[str, ...] = ("FEIDE_PEOPLE_SOCKET", "FEIDE_PEOP
 FEIDE_PEOPLE_COMMANDS: tuple[str, ...] = ("SEARCH", "BIND", "UNBIND")
 # Norwegian letters, and ö, -> ASCII, for uid and mail, which FEIDE takes in ASCII only.
 FEIDE_PEOPLE_ASCII_MAP: dict[int, str] = str.maketrans({"å": "a", "æ": "ae", "ø": "o", "ö": "o", "Å": "A", "Æ": "AE", "Ø": "O", "Ö": "O"})
+# FEIDE's two-factor method by text message, followed by the number
+# (docs.feide.no/reference/mfa/technical_reqs.html).
+FEIDE_PEOPLE_SMS_METHOD: str = "urn:mace:feide.no:auth:method:sms"
 # Longest request line accepted from slapd, so a broken peer cannot exhaust memory.
 FEIDE_PEOPLE_MAX_LINE: int = 65536
 
@@ -459,6 +467,15 @@ def feide_people_ascii(account: str, name: str, value: str) -> str:
     return converted
 
 
+def feide_people_authn_methods(mobiles: list[str]) -> list[str]:
+    """Takes the mobile numbers of an account; returns one SMS two-factor
+    method value per number, with the number exactly as Active Directory
+    holds it. A badly formatted number is not hidden: the person's
+    two-factor login fails and they report it, and the scanner reports it
+    too."""
+    return [FEIDE_PEOPLE_SMS_METHOD + " " + value for value in mobiles]
+
+
 def feide_people_first(attrs: AdAttrs, name: str) -> Optional[str]:
     """Takes attributes and a name; returns the first value, or None."""
     values = attrs.get(name, [])
@@ -497,6 +514,7 @@ def feide_people_build_entry(config: Config, ad: AdAttrs) -> Optional[tuple[str,
         entry["mail"] = [feide_people_ascii(account, "mail", value) for value in ad["mail"]]
     if ad.get("mobile"):
         entry["mobile"] = list(ad["mobile"])
+        entry["noredupersonauthnmethod"] = feide_people_authn_methods(ad["mobile"])
     entry["edupersonaffiliation"] = list(config["AFFILIATIONS"])
     entry["edupersonscopedaffiliation"] = [a + "@" + config["DOMAIN"] for a in config["AFFILIATIONS"]]
     entry["edupersonorgdn"] = [config["BASE_DN"]]
@@ -516,6 +534,7 @@ FEIDE_PEOPLE_ATTR_NAMES: dict[str, str] = {
     "edupersonprincipalname": "eduPersonPrincipalName", "mail": "mail", "mobile": "mobile",
     "edupersonaffiliation": "eduPersonAffiliation", "edupersonscopedaffiliation": "eduPersonScopedAffiliation",
     "edupersonorgdn": "eduPersonOrgDN", "schachomeorganization": "schacHomeOrganization", "ou": "ou",
+    "noredupersonauthnmethod": "norEduPersonAuthnMethod",
 }
 
 
