@@ -48,8 +48,24 @@ RUN /usr/bin/dnf clean all
 # ticket from the keytab and renews it; no kinit, no ccache to manage.
 ENV KRB5_CLIENT_KTNAME=/etc/krb5.keytab
 
-# Schema as delivered by Sikt, plus the templates the entrypoint fills.
+# eduPerson and SCHAC come from REFEDS at build time, pinned to a commit
+# and checked against a SHA-256 sum, so a changed upstream file stops the
+# build instead of slipping in. OpenLDAP ships neither.
+ARG EDUPERSON_URL=https://raw.githubusercontent.com/REFEDS/eduperson/c672bc4be5e081cba95013b1ac1f7e18fd247ca1/schema/openldap/eduperson.schema
+ARG EDUPERSON_SHA256=c6247977be7f1ac89fcac18cb640be87dfdb149cdad6eb94cd10bbfa7614e891
+ARG SCHAC_URL=https://raw.githubusercontent.com/REFEDS/SCHAC/9858cc3cea51fb2bba09d8ba5bde1ef14f2d193d/schema/schac.schema
+ARG SCHAC_SHA256=0311da58d6824b7cae52411acfd88e8d5cdd3da7ec094f13a6ff1b6b22b68219
+RUN /usr/bin/curl -fsSL -o /etc/openldap/schema/eduperson.schema "$EDUPERSON_URL"
+RUN /usr/bin/echo "$EDUPERSON_SHA256  /etc/openldap/schema/eduperson.schema" | /usr/bin/sha256sum -c -
+RUN /usr/bin/curl -fsSL -o /etc/openldap/schema/schac.schema "$SCHAC_URL"
+RUN /usr/bin/echo "$SCHAC_SHA256  /etc/openldap/schema/schac.schema" | /usr/bin/sha256sum -c -
+
+# eduOrg schema (from Stanford's public puppet ldap module, since REFEDS
+# publishes none), the norEdu schema converted from the LDIF Sikt
+# delivered, plus the templates the entrypoint fills.
+COPY schema/eduorg.schema /etc/openldap/schema/eduorg.schema
 COPY schema/52-noredu.ldif /etc/openldap/schema/52-noredu.ldif
+COPY schema/noredu.schema /etc/openldap/schema/noredu.schema
 COPY config/slapd.conf.template /etc/openldap/slapd.conf.template
 COPY schema/org.ldif.template /etc/openldap/org.ldif.template
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
