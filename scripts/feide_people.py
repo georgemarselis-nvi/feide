@@ -87,11 +87,17 @@
 #                            service, "urn:mace:feide.no:spid:all
 #                            urn:mace:feide.no:auth:level:fad08:3"
 #
+# Two-factor is on by default. Started with --disable-two-factor, the
+# program sends neither norEduPersonAuthnMethod nor
+# norEduPersonServiceAuthnLevel, so FEIDE asks for no second factor;
+# --enable-two-factor turns it back on.
+#
 # Not returned: userPassword (never), norEduPersonNIN (the organisation may
 # not hold it).
 
 from __future__ import annotations
 
+import argparse
 import base64
 import datetime
 import os
@@ -184,6 +190,18 @@ def feide_people_log(message: str) -> None:
     flushed at once so lines from different threads do not wait in a
     buffer."""
     print("feide_people: " + message, file=sys.stderr, flush=True)
+
+
+def feide_people_parse_args(argv: list[str]) -> argparse.Namespace:
+    """Takes the command line arguments; returns them parsed. The only
+    choice is --enable-two-factor or --disable-two-factor, enabled by
+    default; the result is in two_factor."""
+    parser = argparse.ArgumentParser(description="Answer slapd's back-sock requests for ou=people from Active Directory.")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--enable-two-factor", dest="two_factor", action="store_true", help="send the SMS two-factor method and require two-factor on every service (default)")
+    group.add_argument("--disable-two-factor", dest="two_factor", action="store_false", help="send no two-factor attributes, so FEIDE asks for no second factor")
+    parser.set_defaults(two_factor=True)
+    return parser.parse_args(argv)
 
 
 def feide_people_config() -> Config:
@@ -520,12 +538,14 @@ def feide_people_build_entry(config: Config, ad: AdAttrs) -> Optional[tuple[str,
         entry["mail"] = [feide_people_ascii(account, "mail", value) for value in ad["mail"]]
     if ad.get("mobile"):
         entry["mobile"] = list(ad["mobile"])
-        entry["noredupersonauthnmethod"] = feide_people_authn_methods(ad["mobile"])
+        if config["TWO_FACTOR"]:
+            entry["noredupersonauthnmethod"] = feide_people_authn_methods(ad["mobile"])
     entry["edupersonaffiliation"] = list(config["AFFILIATIONS"])
     entry["edupersonscopedaffiliation"] = [a + "@" + config["DOMAIN"] for a in config["AFFILIATIONS"]]
     entry["edupersonorgdn"] = [config["BASE_DN"]]
     entry["schachomeorganization"] = [config["DOMAIN"]]
-    entry["noredupersonserviceauthnlevel"] = [FEIDE_PEOPLE_SERVICE_AUTHN_LEVEL]
+    if config["TWO_FACTOR"]:
+        entry["noredupersonserviceauthnlevel"] = [FEIDE_PEOPLE_SERVICE_AUTHN_LEVEL]
     return "uid=" + ldap.dn.escape_dn_chars(uid) + "," + config["PEOPLE_DN"], entry
 
 
@@ -892,16 +912,19 @@ class feide_people_server(socketserver.ThreadingMixIn, socketserver.UnixStreamSe
 
 
 def feide_people_main() -> None:
-    """Reads the configuration, opens the socket readable by its owner only
-    and serves requests until the process is stopped."""
+    """Reads the command line and the configuration, opens the socket
+    readable by its owner only and serves requests until the process is
+    stopped."""
+    args = feide_people_parse_args(sys.argv[1:])
     config = feide_people_config()
+    config["TWO_FACTOR"] = args.two_factor
     path: str = config["FEIDE_PEOPLE_SOCKET"]
     if os.path.exists(path):
         os.unlink(path)
     server = feide_people_server(path, feide_people_handler)
     os.chmod(path, 0o600)
     server.config = config
-    feide_people_log("listening on " + path + " for " + config["PEOPLE_DN"])
+    feide_people_log("listening on " + path + " for " + config["PEOPLE_DN"] + ", two-factor " + ("on" if config["TWO_FACTOR"] else "off"))
     server.serve_forever()
 
 
