@@ -20,7 +20,7 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 # The account is taken from the CN= field of every finding line,
-# including NEW and FIXED lines; each account is searched once.
+# including NEW lines; each account is searched once.
 #
 # Requires a valid Kerberos ticket (kinit).
 #

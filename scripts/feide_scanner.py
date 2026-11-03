@@ -4,13 +4,13 @@
 #
 # run it as:
 #
-#   /usr/bin/python3 scripts/feide_scanner.py --uri ldap://dc01.dfo.no
+#   scripts/feide_scanner.py --uri ldap://dc01.dfo.no
 #
 # --realm (dfo.no) and --base (DC=DFO,DC=NO) are derived from the --uri host; pass them to override.
 #
 # one account only:
 #
-#   /usr/bin/python3 scripts/feide_scanner.py --uri ldap://dc01.dfo.no --account df1234
+#   scripts/feide_scanner.py --uri ldap://dc01.dfo.no --account df1234
 #
 # Server type: the scanner reads the root DSE and treats the server as Active Directory when it lists
 # the Active Directory capability (1.2.840.113556.1.4.800) in supportedCapabilities, and as OpenLDAP
@@ -51,8 +51,8 @@
 #
 # Output: the findings are collected over the whole search and printed at the end, in this order,
 # so the end of the output, the part left on the screen, shows what changed and the totals:
-#   FIXED lines (on a full scan), the open findings sorted by DN, EXCEPTED lines, NEW lines (on a
-#   full scan), one TOTAL line per message and the NEW and FIXED totals.
+#   the open findings sorted by DN, EXCEPTED lines, NEW lines (on a full scan), one TOTAL line per
+#   message and the counts of new and fixed findings.
 #
 # Exceptions: findings a person has accepted are listed in --exceptions (default
 # /etc/feide/scanner-exceptions.tsv), one per line, tab separated:
@@ -60,16 +60,16 @@
 #   <uid>	<attribute or *>	<until YYYY-MM-DD>	<reason>
 #
 # A finding for that uid and attribute (* for every attribute) prints on an EXCEPTED line with the
-# reason, and stays out of the totals, the NEW and FIXED lines, the state file and the exit code.
+# reason, and stays out of the totals, the NEW lines, the fixed count, the state file and the exit code.
 # From the day after the until date the exception no longer applies and the finding returns as NEW.
 # Lines starting with # and empty lines are ignored. A missing file means no exceptions.
 #
 # Changes since the previous scan:
 #   every full scan saves its findings to the state file and compares them with the findings saved
-#   by the scan before it; a finding that is new prints on a NEW line and a finding the previous
-#   scan had and this one does not (fixed, or its account disabled or deleted) prints on a FIXED
-#   line, so support sees what changed;
-#   the first scan has nothing to compare with, so it prints no NEW or FIXED lines;
+#   by the scan before it; a finding that is new prints on a NEW line, and the findings the
+#   previous scan had and this one does not (fixed, or the account disabled or deleted) are only
+#   counted, so support sees what changed;
+#   the first scan has nothing to compare with, so it prints no NEW lines or counts;
 #   scans narrowed with --account or --filter neither read nor save the state file.
 #
 # Copyright (C) 2026 George Marselis <george.marselis@vetinst.no>
@@ -162,7 +162,7 @@ def feide_check_parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--account", action="append", default=[], help="check only this uid; repeat for more, for example --account ab1234 --account emp56789")
     parser.add_argument("--include-disabled", action="store_true", help="Active Directory only: check disabled accounts too")
     parser.add_argument("--filter", default=None, help="raw LDAP search filter for special cases; overrides --account and --include-disabled")
-    parser.add_argument("--state", default=None, help=f"file that keeps the findings of the previous full scan, to print NEW and FIXED lines; default {FEIDE_CHECK_STATE_DIR}/scanner-last-<server type>.tsv")
+    parser.add_argument("--state", default=None, help=f"file that keeps the findings of the previous full scan, to print NEW lines and the new and fixed counts; default {FEIDE_CHECK_STATE_DIR}/scanner-last-<server type>.tsv")
     parser.add_argument("--exceptions", default=FEIDE_CHECK_EXCEPTIONS_FILE, help=f"file of accepted findings, one per line: uid, attribute or *, until date (YYYY-MM-DD) and reason, tab separated; default {FEIDE_CHECK_EXCEPTIONS_FILE}")
     parser.add_argument("--eppn-attr", default=None, help="attribute that becomes eduPersonPrincipalName; default userPrincipalName on Active Directory, eduPersonPrincipalName on OpenLDAP")
     parser.add_argument("--uid-attr", default=None, help="attribute that becomes uid; default sAMAccountName on Active Directory, uid on OpenLDAP")
@@ -544,10 +544,10 @@ def feide_check_scan(conn: ldap.ldapobject.LDAPObject, args: argparse.Namespace)
 
 def feide_check_report(findings: set[Finding], args: argparse.Namespace) -> int:
     """Takes all findings and the parsed arguments; prints, in this order,
-    the FIXED lines (on a full scan), the open findings sorted, the findings
-    covered by an exception on EXCEPTED lines, the NEW lines (on a full
-    scan), one TOTAL line per message and the NEW and FIXED totals, so the
-    end of the output shows what changed. On a full scan it then replaces
+    the open findings sorted, the findings covered by an exception on
+    EXCEPTED lines, the NEW lines (on a full scan), one TOTAL line per
+    message and the counts of new and fixed findings, so the end of the
+    output shows what changed. Fixed findings are counted, not listed. On a full scan it then replaces
     the state file. Excepted findings stay out of the totals, the state
     file and the exit code. Returns the exit code: 0 for no findings, 1 for
     findings, 2 when the state file cannot be saved."""
@@ -563,9 +563,7 @@ def feide_check_report(findings: set[Finding], args: argparse.Namespace) -> int:
     lines = {feide_check_format(finding) for finding in findings}
     previous = feide_check_load_state(args.state) if args.full_scan else None
     new: list[str] = sorted(lines - previous) if previous is not None else []
-    fixed: list[str] = sorted(previous - lines) if previous is not None else []
-    for line in fixed:
-        print(f"FIXED\t{line}")
+    fixed: set[str] = previous - lines if previous is not None else set()
     for finding in sorted(findings):
         print(feide_check_format(finding))
     for finding, reason in sorted(excepted):

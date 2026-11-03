@@ -102,15 +102,14 @@ end, one tab separated line each:
 The order puts what changed and the totals at the end, the part left on
 the screen:
 
-1. FIXED lines, on a full scan (see below).
-2. The open findings, sorted.
-3. EXCEPTED lines (see Exceptions).
-4. NEW lines, on a full scan.
-5. One line per message with the number of accounts it applies to:
+1. The open findings, sorted.
+2. EXCEPTED lines (see Exceptions).
+3. NEW lines, on a full scan (see below).
+4. One line per message with the number of accounts it applies to:
 
        TOTAL	<count>	<message>
 
-6. The NEW and FIXED totals, on a full scan.
+5. The counts of new and fixed findings, on a full scan.
 
 ## Exceptions
 
@@ -130,8 +129,8 @@ account) prints on an EXCEPTED line with the reason:
     EXCEPTED	<DN>	<attribute>	<message>	<value>	<reason>
     TOTAL	<count>	Excepted
 
-Excepted findings stay out of the other totals, the NEW and FIXED lines,
-the state file and the exit code. From the day after the until date the
+Excepted findings stay out of the other totals, the NEW lines, the fixed
+count, the state file and the exit code. From the day after the until date the
 exception no longer applies and the finding comes back as NEW, so no
 exception lasts for ever without someone renewing it. Lines starting
 with # and empty lines are ignored; a missing file means no exceptions.
@@ -142,15 +141,14 @@ A malformed line stops the scanner with the file name and line number.
 Every full scan saves its findings to the state file and compares them
 with the findings saved by the scan before it:
 
-    FIXED	<DN>	<attribute>	<message>	<value>
     NEW	<DN>	<attribute>	<message>	<value>
     TOTAL	<count>	New since the previous scan
     TOTAL	<count>	Fixed since the previous scan
 
-NEW is a finding the previous scan did not have; FIXED is one the
-previous scan had and this one does not, because it was fixed or its
-account was disabled or deleted. The first scan has nothing to compare
-with and prints no NEW or FIXED lines. Scans narrowed with
+NEW is a finding the previous scan did not have. Findings the previous
+scan had and this one does not, because they were fixed or the account
+was disabled or deleted, are only counted, not listed. The first scan
+has nothing to compare with and prints no NEW lines or counts. Scans narrowed with
 --account or --filter neither read nor save the state file, so a check
 of one account never replaces the baseline.
 
