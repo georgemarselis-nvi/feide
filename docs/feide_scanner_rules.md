@@ -9,7 +9,9 @@ From NVI's error list in the FEIDE customer portal, retrieved
 20.09.2026 22:01, with Sikt's answer on phone numbers of 15.10.2026.
 Checked on Active Directory and OpenLDAP.
 
-1. eduPersonPrincipalName: lower case only.
+1. eduPersonPrincipalName: lower case only. Not checked on Active
+   Directory, since the proxy lowercases userPrincipalName on its way to
+   FEIDE.
 2. uid: ASCII only.
 3. schacHomeOrganization must equal the realm part of
    eduPersonPrincipalName.
@@ -49,10 +51,8 @@ Directory only.
     they never reach FEIDE.
 13. An account whose info (Notes) field contains "skjulmeg" ("hide me")
     must not reach FEIDE. The Active Directory administrator keeps the
-    marker on purpose, so the account is reported and not changed. It
-    gets no other checks. An info field that holds anything besides
-    exactly "skjulmeg" (spaces before or after it, or other characters)
-    is reported as well.
+    marker on purpose, so the account is not reported and gets no other
+    checks. A marker with anything besides exactly "skjulmeg" is reported.
 14. An account whose description contains "Ekstern bruker" belongs to
     an external user, who must not log in to FEIDE. It is reported and
     gets no other checks.
