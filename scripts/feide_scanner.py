@@ -55,6 +55,14 @@ FEIDE_CHECK_SINGLE_ATTRS: tuple[str, ...] = ("displayName", "givenName", "sn")
 FEIDE_CHECK_REQUIRED_ATTRS: tuple[str, ...] = ("cn", "sn", "givenName", "displayName", "mail")
 FEIDE_CHECK_ORGUNIT_ATTR: str = "eduPersonOrgUnitDN"
 FEIDE_CHECK_PRIMARY_ORGUNIT_ATTR: str = "eduPersonPrimaryOrgUnitDN"
+# Every attribute a finding can name, on either server type; what --only accepts and
+# --list-attributes prints for the bash completion.
+FEIDE_CHECK_REPORTED_ATTRS: tuple[str, ...] = (
+    "accountExpires", "cn", "description", "displayName", "eduPersonOrgUnitDN",
+    "eduPersonPrimaryOrgUnitDN", "eduPersonPrincipalName", "givenName", "info",
+    "lastLogonTimestamp", "mail", "mobile", "otherMobile", "postalAddress",
+    "sAMAccountName", "sn", "telephoneNumber", "uid", "userPrincipalName",
+)
 FEIDE_CHECK_WHITESPACE_RE: re.Pattern[str] = re.compile(r"^\s|\s$|\s{2,}")
 FEIDE_CHECK_CONTROL_RE: re.Pattern[str] = re.compile(r"[\x00-\x1f\x7f]")
 FEIDE_CHECK_NORWEGIAN_PHONE_PREFIX: str = "+47"
@@ -108,7 +116,12 @@ def feide_check_parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--blocklist", default="", help="space separated uids to leave out even if they match the pattern, for example ab0001")
     parser.add_argument("--stale-days", type=int, default=180, help="Active Directory only: report accounts with no logon in this many days")
     parser.add_argument("--page-size", type=int, default=500, help="paged search page size")
+    parser.add_argument("--only", default="", help="print only the findings for these attributes, comma separated and case ignored, for example --only mail,mobile; the state file still records every finding")
     args = parser.parse_args(argv)
+    known: set[str] = {name.lower() for name in FEIDE_CHECK_REPORTED_ATTRS}
+    unknown: list[str] = [name.strip() for name in args.only.split(",") if name.strip() and name.strip().lower() not in known]
+    if unknown:
+        parser.error(f"--only: unknown attribute {', '.join(unknown)}; the attributes are {', '.join(FEIDE_CHECK_REPORTED_ATTRS)}")
     args.account_re = re.compile(args.account_pattern, re.IGNORECASE) if args.account_pattern else None
     args.blocked = {name.lower() for name in args.blocklist.split()}
     args.now = datetime.datetime.now(datetime.timezone.utc)
@@ -489,7 +502,9 @@ def feide_check_scan(conn: ldap.ldapobject.LDAPObject, args: argparse.Namespace)
 def feide_check_report(findings: set[Finding], args: argparse.Namespace) -> int:
     """Takes all findings and the parsed arguments; prints them with the
     totals and, on a full scan, the changes since the previous scan, then
-    replaces the state file. Returns the exit code: 0 for no findings, 1
+    replaces the state file. With --only, only the findings for those
+    attributes are printed, counted and returned, while the state file
+    still records every finding. Returns the exit code: 0 for no findings, 1
     for findings, 2 when the state file cannot be saved."""
     excepted: list[tuple[Finding, str]] = []
     open_findings: set[Finding] = set()
@@ -504,6 +519,12 @@ def feide_check_report(findings: set[Finding], args: argparse.Namespace) -> int:
     previous = feide_check_load_state(args.state) if args.full_scan else None
     new: list[str] = sorted(lines - previous) if previous is not None else []
     fixed: set[str] = previous - lines if previous is not None else set()
+    only: set[str] = {name.strip().lower() for name in args.only.split(",") if name.strip()}
+    if only:
+        findings = {finding for finding in findings if finding[2].lower() in only}
+        excepted = [(finding, reason) for finding, reason in excepted if finding[2].lower() in only]
+        new = [line for line in new if line.split("\t")[1].lower() in only]
+        fixed = {line for line in fixed if line.split("\t")[1].lower() in only}
     hidden: set[Finding] = {finding for finding in findings if finding[3] == FEIDE_CHECK_HIDE_EXTRA_MESSAGE}
     for finding in sorted(findings - hidden):
         print(feide_check_format(finding))
@@ -534,7 +555,12 @@ def feide_check_report(findings: set[Finding], args: argparse.Namespace) -> int:
 
 def feide_check_main(argv: list[str]) -> int:
     """Takes the command line arguments; connects, works out the server type,
-    scans and reports. Returns the exit code."""
+    scans and reports. Returns the exit code. --list-attributes, used by the
+    bash completion, prints the attributes --only accepts and exits before
+    the other options are checked."""
+    if "--list-attributes" in argv:
+        print("\n".join(FEIDE_CHECK_REPORTED_ATTRS))
+        return 0
     args = feide_check_parse_args(argv)
     try:
         conn = feide_check_connect(args.uri)

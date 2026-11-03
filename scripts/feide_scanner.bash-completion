@@ -1,0 +1,76 @@
+# feide_scanner.bash-completion
+#
+# Bash completion for feide_scanner.py: completes the attribute names after
+# --only, also after a comma (--only mail,mo<TAB> -> mobile).
+#
+# Copyright (C) 2026 George Marselis <george.marselis@vetinst.no>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+#
+# Install it once:
+#   cp scripts/feide_scanner.bash-completion /etc/bash_completion.d/feide_scanner
+#
+# The attribute names come from the scanner itself (--list-attributes), so
+# the list never drifts from the checks. Everything else completes as files.
+
+feide_scanner_complete() {
+	local current="${COMP_WORDS[COMP_CWORD]}"
+	local previous="${COMP_WORDS[COMP_CWORD-1]}"
+	[ "$previous" = "--only" ] || return 1
+
+	local prefix=""
+	local word="$current"
+	case "$current" in
+		*,*) prefix="${current%,*},"; word="${current##*,}" ;;
+	esac
+
+	# Attributes already typed are not offered again, case ignored.
+	local chosen=",${prefix,,}"
+	local attribute
+	local matches=()
+	for attribute in $("${COMP_WORDS[0]}" --list-attributes 2>/dev/null); do
+		[[ "$attribute" == "$word"* ]] || continue
+		[[ "$chosen" == *",${attribute,,},"* ]] && continue
+		matches+=("$attribute")
+	done
+	compopt -o nospace
+
+	# One match: insert it after the attributes already typed.
+	if [ "${#matches[@]}" -le 1 ]; then
+		COMPREPLY=( "${matches[@]/#/$prefix}" )
+		return 0
+	fi
+
+	# Several matches sharing more than what is typed: insert the shared part.
+	local common="${matches[0]}"
+	for attribute in "${matches[@]}"; do
+		while [[ "$attribute" != "$common"* ]]; do
+			common="${common%?}"
+		done
+	done
+	if [ "${#common}" -gt "${#word}" ]; then
+		COMPREPLY=( "$prefix$common" )
+		return 0
+	fi
+
+	# Otherwise list the bare names. Bash replaces the whole word with the
+	# common part of the list, which would drop the attributes already
+	# typed; the blank entry leaves the list nothing in common, so the line
+	# stays as it is.
+	COMPREPLY=( "${matches[@]}" )
+	[ -n "$prefix" ] && [ -n "$word" ] && COMPREPLY+=( " " )
+	return 0
+}
+
+complete -o default -F feide_scanner_complete feide_scanner.py

@@ -32,6 +32,16 @@ Only accounts that are people, leaving out one shared account:
 
     scripts/feide_scanner.py --uri ldap://dc01.example.no --account-pattern 'ab[0-9]{4}' --blocklist ab0001
 
+Only the findings for some attributes, comma separated:
+
+    scripts/feide_scanner.py --uri ldap://dc01.example.no --only mail,mobile
+
+--only takes the attribute names in the second column of the output;
+an unknown name stops the scanner with the list of valid ones. Tab
+completion for them, installed once:
+
+    cp scripts/feide_scanner.bash-completion /etc/bash_completion.d/feide_scanner
+
 --realm (example.no) and --base (DC=EXAMPLE,DC=NO) are derived from
 the host in --uri; pass them to override. --help lists every option.
 
@@ -55,64 +65,18 @@ The server type picks the defaults:
 
 ## What it checks
 
-On both server types:
-
-- eduPersonPrincipalName in lower case only, with a realm part equal to
-  the FEIDE realm.
-- uid and mail in ASCII only.
-- No leading, trailing or doubled whitespace and no control characters
-  in cn, displayName, givenName, mail, sn and postalAddress.
-- mobile in international format with no spaces: +47 followed by
-  exactly eight digits for a Norwegian number, otherwise + and a country
-  code with at least three digits in all. Sikt confirmed on 2026-10-15
-  that the validator accepts foreign numbers in international format.
-- One value only in displayName, givenName, sn and eduPersonPrincipalName.
-- cn, sn, givenName, displayName, mail and eduPersonPrincipalName
-  present.
-- No uid or eduPersonPrincipalName shared by two accounts.
-- eduPersonOrgUnitDN and eduPersonPrimaryOrgUnitDN resolve to entries,
-  and the primary unit is among the units.
-
-On Active Directory only:
-
-- info (the Notes field) containing "skjulmeg" ("hide me"): the account
-  must not reach FEIDE. It gets no other checks. An info field that
-  holds anything besides exactly "skjulmeg", such as spaces before or
-  after it or other characters, is reported as well.
-- description containing "Ekstern bruker": external users must not log
-  in to FEIDE. The account gets no other checks.
-- mobile and telephoneNumber present, and telephoneNumber and
-  otherMobile in the same international format as mobile.
-- displayName in the form "Surname, Given", with the same names as sn
-  and givenName.
-- lastLogonTimestamp: never logged on, or no logon in --stale-days
-  (default 180). People who only use Microsoft 365 in the cloud show up
-  here too, so check before disabling anyone.
-- accountExpires: an enabled account whose expiry date has passed.
-
+The rules and where each comes from are in feide_scanner_rules.md.
 --account-pattern and --blocklist leave out accounts that are not
 people (shared mailboxes, rooms, admin and service accounts) on either
 server type. The pattern must match the whole uid, case ignored.
 
 ## Output
 
-The findings are collected over the whole search and printed at the
-end, one tab separated line each:
+One tab separated line per finding, then one TOTAL line per message
+with the number of accounts it applies to:
 
     <DN>	<attribute>	<message>	<value>
-
-The order puts what changed and the totals at the end, the part left on
-the screen:
-
-1. The open findings, sorted.
-2. EXCEPTED lines (see Exceptions).
-3. The "skjulmeg" findings, grouped together.
-4. NEW lines, on a full scan (see below).
-5. One line per message with the number of accounts it applies to:
-
-       TOTAL	<count>	<message>
-
-6. The counts of new and fixed findings, on a full scan.
+    TOTAL	<count>	<message>
 
 ## Exceptions
 
@@ -127,33 +91,21 @@ For example:
     ab1234	mobile	2026-11-30	foreign number, waiting on the user
 
 A finding for that uid and attribute (* for every attribute of the
-account) prints on an EXCEPTED line with the reason:
-
-    EXCEPTED	<DN>	<attribute>	<message>	<value>	<reason>
-    TOTAL	<count>	Excepted
-
-Excepted findings stay out of the other totals, the NEW lines, the fixed
-count, the state file and the exit code. From the day after the until date the
-exception no longer applies and the finding comes back as NEW, so no
-exception lasts for ever without someone renewing it. Lines starting
-with # and empty lines are ignored; a missing file means no exceptions.
-A malformed line stops the scanner with the file name and line number.
+account) prints on an EXCEPTED line with the reason and stays out of
+the totals, the state file and the exit code. From the day after the
+until date the finding comes back, so no exception lasts for ever
+without someone renewing it. Lines starting with # and empty lines are
+ignored; a missing file means no exceptions. A malformed line stops the
+scanner with the file name and line number.
 
 ## Changes since the previous scan
 
 Every full scan saves its findings to the state file and compares them
-with the findings saved by the scan before it:
-
-    NEW	<DN>	<attribute>	<message>	<value>
-    TOTAL	<count>	New since the previous scan
-    TOTAL	<count>	Fixed since the previous scan
-
-NEW is a finding the previous scan did not have. Findings the previous
-scan had and this one does not, because they were fixed or the account
-was disabled or deleted, are only counted, not listed. The first scan
-has nothing to compare with and prints no NEW lines or counts. Scans narrowed with
---account or --filter neither read nor save the state file, so a check
-of one account never replaces the baseline.
+with the scan before it. A finding the previous scan did not have is
+printed again on a NEW line; the totals end with the number of new and
+fixed findings. The first scan has nothing to compare with. Scans
+narrowed with --account or --filter neither read nor save the state
+file, so a check of one account never replaces the baseline.
 
 ## Exit codes
 
