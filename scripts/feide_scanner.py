@@ -49,8 +49,10 @@
 # --account-pattern and --blocklist leave out accounts that are not people (for example ab[0-9]{4}
 # or emp[0-9]{5}, and ab0001), on either server type.
 #
-# Output: the findings are collected over the whole search and printed at the end, sorted by DN,
-# then one TOTAL line per message.
+# Output: the findings are collected over the whole search and printed at the end, in this order,
+# so the end of the output, the part left on the screen, shows what changed and the totals:
+#   FIXED lines (on a full scan), the open findings sorted by DN, EXCEPTED lines, NEW lines (on a
+#   full scan), one TOTAL line per message and the NEW and FIXED totals.
 #
 # Exceptions: findings a person has accepted are listed in --exceptions (default
 # /etc/feide/scanner-exceptions.tsv), one per line, tab separated:
@@ -58,15 +60,16 @@
 #   <uid>	<attribute or *>	<until YYYY-MM-DD>	<reason>
 #
 # A finding for that uid and attribute (* for every attribute) prints on an EXCEPTED line with the
-# reason, and stays out of the totals, the NEW and GONE lines, the state file and the exit code.
+# reason, and stays out of the totals, the NEW and FIXED lines, the state file and the exit code.
 # From the day after the until date the exception no longer applies and the finding returns as NEW.
 # Lines starting with # and empty lines are ignored. A missing file means no exceptions.
 #
 # Changes since the previous scan:
 #   every full scan saves its findings to the state file and compares them with the findings saved
-#   by the scan before it; a finding that is new prints on a NEW line and a finding that has gone
-#   prints on a GONE line, so support sees what changed;
-#   the first scan has nothing to compare with, so it prints no NEW or GONE lines;
+#   by the scan before it; a finding that is new prints on a NEW line and a finding the previous
+#   scan had and this one does not (fixed, or its account disabled or deleted) prints on a FIXED
+#   line, so support sees what changed;
+#   the first scan has nothing to compare with, so it prints no NEW or FIXED lines;
 #   scans narrowed with --account or --filter neither read nor save the state file.
 #
 # Copyright (C) 2026 George Marselis <george.marselis@vetinst.no>
@@ -159,7 +162,7 @@ def feide_check_parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--account", action="append", default=[], help="check only this uid; repeat for more, for example --account ab1234 --account emp56789")
     parser.add_argument("--include-disabled", action="store_true", help="Active Directory only: check disabled accounts too")
     parser.add_argument("--filter", default=None, help="raw LDAP search filter for special cases; overrides --account and --include-disabled")
-    parser.add_argument("--state", default=None, help=f"file that keeps the findings of the previous full scan, to print NEW and GONE lines; default {FEIDE_CHECK_STATE_DIR}/scanner-last-<server type>.tsv")
+    parser.add_argument("--state", default=None, help=f"file that keeps the findings of the previous full scan, to print NEW and FIXED lines; default {FEIDE_CHECK_STATE_DIR}/scanner-last-<server type>.tsv")
     parser.add_argument("--exceptions", default=FEIDE_CHECK_EXCEPTIONS_FILE, help=f"file of accepted findings, one per line: uid, attribute or *, until date (YYYY-MM-DD) and reason, tab separated; default {FEIDE_CHECK_EXCEPTIONS_FILE}")
     parser.add_argument("--eppn-attr", default=None, help="attribute that becomes eduPersonPrincipalName; default userPrincipalName on Active Directory, eduPersonPrincipalName on OpenLDAP")
     parser.add_argument("--uid-attr", default=None, help="attribute that becomes uid; default sAMAccountName on Active Directory, uid on OpenLDAP")
@@ -540,13 +543,14 @@ def feide_check_scan(conn: ldap.ldapobject.LDAPObject, args: argparse.Namespace)
 
 
 def feide_check_report(findings: set[Finding], args: argparse.Namespace) -> int:
-    """Takes all findings and the parsed arguments; prints the findings
-    covered by an exception on EXCEPTED lines, the rest sorted, one TOTAL
-    line per message and, on a full scan, the NEW and GONE lines against
-    the state file, which it then replaces. Excepted findings stay out of
-    the totals, the state file and the exit code. Returns the exit code:
-    0 for no findings, 1 for findings, 2 when the state file cannot be
-    saved."""
+    """Takes all findings and the parsed arguments; prints, in this order,
+    the FIXED lines (on a full scan), the open findings sorted, the findings
+    covered by an exception on EXCEPTED lines, the NEW lines (on a full
+    scan), one TOTAL line per message and the NEW and FIXED totals, so the
+    end of the output shows what changed. On a full scan it then replaces
+    the state file. Excepted findings stay out of the totals, the state
+    file and the exit code. Returns the exit code: 0 for no findings, 1 for
+    findings, 2 when the state file cannot be saved."""
     excepted: list[tuple[Finding, str]] = []
     open_findings: set[Finding] = set()
     for finding in findings:
@@ -556,10 +560,18 @@ def feide_check_report(findings: set[Finding], args: argparse.Namespace) -> int:
         else:
             excepted.append((finding, reason))
     findings = open_findings
+    lines = {feide_check_format(finding) for finding in findings}
+    previous = feide_check_load_state(args.state) if args.full_scan else None
+    new: list[str] = sorted(lines - previous) if previous is not None else []
+    fixed: list[str] = sorted(previous - lines) if previous is not None else []
+    for line in fixed:
+        print(f"FIXED\t{line}")
     for finding in sorted(findings):
         print(feide_check_format(finding))
     for finding, reason in sorted(excepted):
         print(f"EXCEPTED\t{feide_check_format(finding)}\t{reason}")
+    for line in new:
+        print(f"NEW\t{line}")
     users: collections.defaultdict[str, set[str]] = collections.defaultdict(set)
     for dn, _, _, message, _ in findings:
         users[message].add(dn)
@@ -567,18 +579,10 @@ def feide_check_report(findings: set[Finding], args: argparse.Namespace) -> int:
         print(f"TOTAL\t{len(users[message])}\t{message}")
     if excepted:
         print(f"TOTAL\t{len(excepted)}\tExcepted")
+    if previous is not None:
+        print(f"TOTAL\t{len(new)}\tNew since the previous scan")
+        print(f"TOTAL\t{len(fixed)}\tFixed since the previous scan")
     if args.full_scan:
-        lines = {feide_check_format(finding) for finding in findings}
-        previous = feide_check_load_state(args.state)
-        if previous is not None:
-            new = sorted(lines - previous)
-            gone = sorted(previous - lines)
-            for line in new:
-                print(f"NEW\t{line}")
-            for line in gone:
-                print(f"GONE\t{line}")
-            print(f"TOTAL\t{len(new)}\tNew since the previous scan")
-            print(f"TOTAL\t{len(gone)}\tGone since the previous scan")
         try:
             feide_check_save_state(args.state, lines)
         except OSError as error:
