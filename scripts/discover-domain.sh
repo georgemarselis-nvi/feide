@@ -2,7 +2,7 @@
 # discover-domain.sh
 #
 # Find the organisation's domain (for schacHomeOrganization and the
-# Feide realm) from the network the host sits on, without trusting
+# FEIDE realm) from the network the host sits on, without trusting
 # anything local to the host.
 #
 # Copyright (C) 2026 George Marselis <george.marselis@vetinst.no>

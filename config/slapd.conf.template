@@ -48,7 +48,7 @@ moduleload	back_sock.la
 # TLS. The certificate and key come from certbot on the host and are
 # mounted read only. TLS 1.2 stays enabled because Sikt requires it;
 # the suite list is the four ECDHE-GCM suites from the README, eased
-# towards Feide's full list of twelve only if Sikt fails to connect.
+# towards FEIDE's full list of twelve only if Sikt fails to connect.
 TLSCertificateFile	/etc/openldap/certs/fullchain.pem
 TLSCertificateKeyFile	/etc/openldap/certs/privkey.pem
 TLSProtocolMin		3.3

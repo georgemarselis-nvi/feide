@@ -1,8 +1,8 @@
 # feide_scanner.py
 
 The scanner checks the user entries of a directory against the rules
-the Feide validator applies, so problems are found and fixed before the
-Feide customer portal reports them. Against Active Directory it also
+the FEIDE validator applies, so problems are found and fixed before the
+FEIDE customer portal reports them. Against Active Directory it also
 works as a general health check of the user data: leavers, inactive
 accounts, missing phone numbers and names that disagree between fields.
 
@@ -58,7 +58,7 @@ The server type picks the defaults:
 On both server types:
 
 - eduPersonPrincipalName in lower case only, with a realm part equal to
-  the Feide realm.
+  the FEIDE realm.
 - uid and mail in ASCII only.
 - No leading, trailing or doubled whitespace and no control characters
   in cn, displayName, givenName, mail, sn and postalAddress.
@@ -76,11 +76,11 @@ On both server types:
 On Active Directory only:
 
 - info (the Notes field) containing "skjulmeg" ("hide me"): the account
-  must not reach Feide. It gets no other checks. An info field that
+  must not reach FEIDE. It gets no other checks. An info field that
   holds anything besides exactly "skjulmeg", such as spaces before or
   after it or other characters, is reported as well.
 - description containing "Ekstern bruker": external users must not log
-  in to Feide. The account gets no other checks.
+  in to FEIDE. The account gets no other checks.
 - mobile and telephoneNumber present, and telephoneNumber and
   otherMobile in the same international format as mobile.
 - displayName in the form "Surname, Given", with the same names as sn
@@ -106,12 +106,13 @@ the screen:
 
 1. The open findings, sorted.
 2. EXCEPTED lines (see Exceptions).
-3. NEW lines, on a full scan (see below).
-4. One line per message with the number of accounts it applies to:
+3. The "skjulmeg" findings, grouped together.
+4. NEW lines, on a full scan (see below).
+5. One line per message with the number of accounts it applies to:
 
        TOTAL	<count>	<message>
 
-5. The counts of new and fixed findings, on a full scan.
+6. The counts of new and fixed findings, on a full scan.
 
 ## Exceptions
 
@@ -167,5 +168,5 @@ of one account never replaces the baseline.
   proxy until it is given a way in.
 - Searches are paged, since Active Directory stops an unpaged search at
   1000 entries. Paging through the proxy (back-sock) has not been tested.
-- The required attribute list is not yet verified against the Feide
+- The required attribute list is not yet verified against the FEIDE
   information model.

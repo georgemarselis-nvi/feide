@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # feide_scanner.py
-# Checks the user entries of an LDAP directory for the attribute errors reported by the Feide customer portal and for violations of the eduPerson and norEdu schema definitions.
+# Checks the user entries of an LDAP directory for the attribute errors reported by the FEIDE customer portal and for violations of the eduPerson and norEdu schema definitions.
 #
 # run it as:
 #
@@ -28,20 +28,20 @@
 # Phone numbers (mobile, telephoneNumber and otherMobile) must be in international format with no spaces:
 #   +47 followed by exactly eight digits for Norwegian numbers (+4792345678);
 #   + and a country code for other countries, at least three digits in all (+43123456789).
-# Sikt (Feide support, 2026-10-15): the Feide validator applies the Norwegian length check to +47 numbers
+# Sikt (FEIDE support, 2026-10-15): the FEIDE validator applies the Norwegian length check to +47 numbers
 # and to numbers with no country code; for other country codes it only requires three digits.
 # Assumption: norEduPersonLegalName is built from givenName plus sn, so its whitespace errors are reported under those two attributes.
-# Assumption: the required attribute list (cn, sn, givenName, displayName, eduPersonPrincipalName, mail) is not yet verified against the Feide information model.
+# Assumption: the required attribute list (cn, sn, givenName, displayName, eduPersonPrincipalName, mail) is not yet verified against the FEIDE information model.
 # The org unit checks only produce results against the proxy output, since AD holds no eduPerson attributes.
 #
 # Active Directory checks, which only run against Active Directory:
-#   disabled accounts are left out unless --include-disabled, since they never reach Feide;
+#   disabled accounts are left out unless --include-disabled, since they never reach FEIDE;
 #   accounts whose info (Notes) field contains "skjulmeg" ("hide me") are reported, since they must
-#   not reach Feide; the AD administrator keeps the marker, so the accounts are not touched;
+#   not reach FEIDE; the AD administrator keeps the marker, so the accounts are not touched;
 #   an info field that holds anything besides exactly "skjulmeg" (spaces before or after it, or
 #   other characters) is reported as well;
 #   accounts whose description contains "Ekstern bruker" are reported, since external users must
-#   not log in to Feide; neither kind gets the other checks;
+#   not log in to FEIDE; neither kind gets the other checks;
 #   a missing mobile or telephoneNumber is reported, since both are filled when an account is created;
 #   displayName must be "Surname, Given" with the same names as sn and givenName;
 #   an account with no lastLogonTimestamp newer than --stale-days is reported; people who only use
@@ -53,8 +53,8 @@
 #
 # Output: the findings are collected over the whole search and printed at the end, in this order,
 # so the end of the output, the part left on the screen, shows what changed and the totals:
-#   the open findings sorted by DN, EXCEPTED lines, NEW lines (on a full scan), one TOTAL line per
-#   message and the counts of new and fixed findings.
+#   the open findings sorted by DN, EXCEPTED lines, the "skjulmeg" findings grouped together, NEW
+#   lines (on a full scan), one TOTAL line per message and the counts of new and fixed findings.
 #
 # Exceptions: findings a person has accepted are listed in --exceptions (default
 # /etc/feide/scanner-exceptions.tsv), one per line, tab separated:
@@ -126,6 +126,8 @@ FEIDE_CHECK_NORWEGIAN_PHONE_PREFIX: str = "+47"
 FEIDE_CHECK_NORWEGIAN_PHONE_RE: re.Pattern[str] = re.compile(r"^\+47[0-9]{8}$")
 FEIDE_CHECK_INTERNATIONAL_PHONE_RE: re.Pattern[str] = re.compile(r"^\+[1-9][0-9]{2,}$")
 FEIDE_CHECK_HIDE_MARKER: str = "skjulmeg"
+FEIDE_CHECK_HIDE_MESSAGE: str = "Marked \"skjulmeg\""
+FEIDE_CHECK_HIDE_EXTRA_MESSAGE: str = "info holds more than \"skjulmeg\" (spaces or other characters)"
 FEIDE_CHECK_EXTERNAL_MARKER: str = "ekstern bruker"
 # lastLogonTimestamp counts 100 ns intervals since 1601-01-01 UTC.
 FEIDE_CHECK_FILETIME_EPOCH: datetime.datetime = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc)
@@ -156,11 +158,11 @@ def feide_check_parse_args(argv: list[str]) -> argparse.Namespace:
     """Takes the command line arguments; returns them parsed, with the realm
     and base derived from --uri when left out. The server type defaults are
     applied later by feide_check_apply_profile, once the server is known."""
-    parser = argparse.ArgumentParser(description="Check LDAP user entries against the Feide customer portal attribute rules.")
+    parser = argparse.ArgumentParser(description="Check LDAP user entries against the FEIDE customer portal attribute rules.")
     parser.add_argument("--uri", required=True, help="LDAP URI, for example ldap://dc01.dfo.no")
     parser.add_argument("--server", choices=("auto", FEIDE_CHECK_SERVER_AD, FEIDE_CHECK_SERVER_OPENLDAP), default="auto", help="server type; auto reads the root DSE (default auto)")
     parser.add_argument("--base", default=None, help="search base, for example DC=dfo,DC=no; derived from the realm when left out")
-    parser.add_argument("--realm", default=None, help="Feide realm (schacHomeOrganization), for example dfo.no; derived from the --uri host when left out")
+    parser.add_argument("--realm", default=None, help="FEIDE realm (schacHomeOrganization), for example dfo.no; derived from the --uri host when left out")
     parser.add_argument("--account", action="append", default=[], help="check only this uid; repeat for more, for example --account ab1234 --account emp56789")
     parser.add_argument("--include-disabled", action="store_true", help="Active Directory only: check disabled accounts too")
     parser.add_argument("--filter", default=None, help="raw LDAP search filter for special cases; overrides --account and --include-disabled")
@@ -320,7 +322,7 @@ def feide_check_decode(entry: dict[str, list[bytes]]) -> Attrs:
 
 
 def feide_check_entry(attrs: Attrs, args: argparse.Namespace) -> list[Problem]:
-    """Takes the decoded attributes; returns the problems the Feide customer
+    """Takes the decoded attributes; returns the problems the FEIDE customer
     portal reports, on either server type."""
     errors: list[Problem] = []
     for value in attrs.get(args.eppn_attr.lower(), []):
@@ -370,18 +372,18 @@ def feide_check_phone(value: str) -> Optional[str]:
 
 def feide_check_excluded_reason(attrs: Attrs) -> list[Problem]:
     """Takes the decoded attributes; returns why the account must not reach
-    Feide ("skjulmeg" in info, or "Ekstern bruker" in description), plus a
+    FEIDE ("skjulmeg" in info, or "Ekstern bruker" in description), plus a
     second problem when info holds anything besides exactly "skjulmeg";
-    an empty list when the account may reach Feide."""
+    an empty list when the account may reach FEIDE."""
     for value in attrs.get("info", []):
         if FEIDE_CHECK_HIDE_MARKER in value.lower():
-            problems: list[Problem] = [("info", "Marked \"skjulmeg\" (hide me), must not reach Feide", value)]
+            problems: list[Problem] = [("info", FEIDE_CHECK_HIDE_MESSAGE, value)]
             if value != FEIDE_CHECK_HIDE_MARKER:
-                problems.append(("info", "info holds more than \"skjulmeg\" (spaces or other characters)", value))
+                problems.append(("info", FEIDE_CHECK_HIDE_EXTRA_MESSAGE, value))
             return problems
     for value in attrs.get("description", []):
         if FEIDE_CHECK_EXTERNAL_MARKER in value.lower():
-            return [("description", "External user, must not log in to Feide", value)]
+            return [("description", "External user, must not log in to FEIDE", value)]
     return []
 
 
@@ -552,10 +554,11 @@ def feide_check_scan(conn: ldap.ldapobject.LDAPObject, args: argparse.Namespace)
 def feide_check_report(findings: set[Finding], args: argparse.Namespace) -> int:
     """Takes all findings and the parsed arguments; prints, in this order,
     the open findings sorted, the findings covered by an exception on
-    EXCEPTED lines, the NEW lines (on a full scan), one TOTAL line per
-    message and the counts of new and fixed findings, so the end of the
-    output shows what changed. Fixed findings are counted, not listed. On a full scan it then replaces
-    the state file. Excepted findings stay out of the totals, the state
+    EXCEPTED lines, the "skjulmeg" findings grouped together, the NEW lines
+    (on a full scan), one TOTAL line per message and the counts of new and
+    fixed findings, so the end of the output shows what changed. Fixed
+    findings are counted, not listed. On a full scan it then replaces the
+    state file. Excepted findings stay out of the totals, the state
     file and the exit code. Returns the exit code: 0 for no findings, 1 for
     findings, 2 when the state file cannot be saved."""
     excepted: list[tuple[Finding, str]] = []
@@ -571,10 +574,13 @@ def feide_check_report(findings: set[Finding], args: argparse.Namespace) -> int:
     previous = feide_check_load_state(args.state) if args.full_scan else None
     new: list[str] = sorted(lines - previous) if previous is not None else []
     fixed: set[str] = previous - lines if previous is not None else set()
-    for finding in sorted(findings):
+    hidden: set[Finding] = {finding for finding in findings if finding[3] in (FEIDE_CHECK_HIDE_MESSAGE, FEIDE_CHECK_HIDE_EXTRA_MESSAGE)}
+    for finding in sorted(findings - hidden):
         print(feide_check_format(finding))
     for finding, reason in sorted(excepted):
         print(f"EXCEPTED\t{feide_check_format(finding)}\t{reason}")
+    for finding in sorted(hidden):
+        print(feide_check_format(finding))
     for line in new:
         print(f"NEW\t{line}")
     users: collections.defaultdict[str, set[str]] = collections.defaultdict(set)
