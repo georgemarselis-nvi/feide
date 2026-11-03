@@ -38,6 +38,8 @@
 #   disabled accounts are left out unless --include-disabled, since they never reach Feide;
 #   accounts whose info (Notes) field contains "skjulmeg" ("hide me") are reported, since they must
 #   not reach Feide; the AD administrator keeps the marker, so the accounts are not touched;
+#   an info field that holds anything besides exactly "skjulmeg" (spaces before or after it, or
+#   other characters) is reported as well;
 #   accounts whose description contains "Ekstern bruker" are reported, since external users must
 #   not log in to Feide; neither kind gets the other checks;
 #   a missing mobile or telephoneNumber is reported, since both are filled when an account is created;
@@ -366,17 +368,21 @@ def feide_check_phone(value: str) -> Optional[str]:
     return "is not in international format (+ and country code, no spaces)"
 
 
-def feide_check_excluded_reason(attrs: Attrs) -> Optional[Problem]:
+def feide_check_excluded_reason(attrs: Attrs) -> list[Problem]:
     """Takes the decoded attributes; returns why the account must not reach
-    Feide ("skjulmeg" in info, or "Ekstern bruker" in description), or
-    None."""
+    Feide ("skjulmeg" in info, or "Ekstern bruker" in description), plus a
+    second problem when info holds anything besides exactly "skjulmeg";
+    an empty list when the account may reach Feide."""
     for value in attrs.get("info", []):
         if FEIDE_CHECK_HIDE_MARKER in value.lower():
-            return ("info", "Marked \"skjulmeg\" (hide me), must not reach Feide", value)
+            problems: list[Problem] = [("info", "Marked \"skjulmeg\" (hide me), must not reach Feide", value)]
+            if value != FEIDE_CHECK_HIDE_MARKER:
+                problems.append(("info", "info holds more than \"skjulmeg\" (spaces or other characters)", value))
+            return problems
     for value in attrs.get("description", []):
         if FEIDE_CHECK_EXTERNAL_MARKER in value.lower():
-            return ("description", "External user, must not log in to Feide", value)
-    return None
+            return [("description", "External user, must not log in to Feide", value)]
+    return []
 
 
 def feide_check_is_person(attrs: Attrs, args: argparse.Namespace) -> bool:
@@ -522,9 +528,10 @@ def feide_check_scan(conn: ldap.ldapobject.LDAPObject, args: argparse.Namespace)
             continue
         uid = (decoded.get(args.uid_attr.lower()) or [""])[0]
         uids[dn] = uid
-        excluded = feide_check_excluded_reason(decoded) if args.is_ad else None
+        excluded: list[Problem] = feide_check_excluded_reason(decoded) if args.is_ad else []
         if excluded:
-            findings.add((dn, uid) + excluded)
+            for problem in excluded:
+                findings.add((dn, uid) + problem)
             continue
         problems = feide_check_entry(decoded, args) + feide_check_orgunits(conn, decoded, cache)
         if args.is_ad:

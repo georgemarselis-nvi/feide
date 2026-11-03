@@ -50,7 +50,9 @@ Directory only.
 13. An account whose info (Notes) field contains "skjulmeg" ("hide me")
     must not reach Feide. The Active Directory administrator keeps the
     marker on purpose, so the account is reported and not changed. It
-    gets no other checks.
+    gets no other checks. An info field that holds anything besides
+    exactly "skjulmeg" (spaces before or after it, or other characters)
+    is reported as well.
 14. An account whose description contains "Ekstern bruker" belongs to
     an external user, who must not log in to Feide. It is reported and
     gets no other checks.

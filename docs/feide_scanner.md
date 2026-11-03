@@ -76,7 +76,9 @@ On both server types:
 On Active Directory only:
 
 - info (the Notes field) containing "skjulmeg" ("hide me"): the account
-  must not reach Feide. It gets no other checks.
+  must not reach Feide. It gets no other checks. An info field that
+  holds anything besides exactly "skjulmeg", such as spaces before or
+  after it or other characters, is reported as well.
 - description containing "Ekstern bruker": external users must not log
   in to Feide. The account gets no other checks.
 - mobile and telephoneNumber present, and telephoneNumber and
