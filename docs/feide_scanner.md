@@ -89,7 +89,8 @@ of accounts it applies to:
     TOTAL	<count>	<message>
 
 The status is empty for an open finding, EXCEPTED (followed by the
-reason after the value) or NEW. Every column is padded with spaces to
+reason after the value), INFO (information, not a failure: it does not
+count in the exit code and is not written to the state file) or NEW. Every column is padded with spaces to
 its widest value and followed by a tab, so the columns line up on screen
 and the output still splits on tabs; the finding lines and the TOTAL
 lines are each aligned on their own. Strip the padding when reading a

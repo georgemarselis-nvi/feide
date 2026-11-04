@@ -71,6 +71,9 @@ FEIDE_CHECK_INTERNATIONAL_PHONE_RE: re.Pattern[str] = re.compile(r"^\+[1-9][0-9]
 FEIDE_CHECK_HIDE_MARKER: str = "skjulmeg"
 FEIDE_CHECK_HIDE_EXTRA_MESSAGE: str = "Marked \"skjulmeg\", with spaces or other characters"
 FEIDE_CHECK_HIDE_TYPO_MESSAGE: str = "Close to \"skjulmeg\", check the marker"
+# Information, not a failure: printed on INFO lines, never counted in the
+# exit code and never written to the state file.
+FEIDE_CHECK_EXPIRES_INFO_MESSAGE: str = "Account expires"
 # Most letter changes (insert, delete, replace) between a word in info
 # and "skjulmeg" that still count as a misspelt marker.
 FEIDE_CHECK_HIDE_TYPO_DISTANCE: int = 2
@@ -431,6 +434,8 @@ def feide_check_ad(attrs: Attrs, args: argparse.Namespace) -> list[Problem]:
     expiry = feide_check_filetime(expires[0]) if expires else None
     if expiry is not None and expiry <= args.now:
         errors.append(("accountExpires", "Account expired but still enabled", expiry.date().isoformat()))
+    elif expiry is not None:
+        errors.append(("accountExpires", FEIDE_CHECK_EXPIRES_INFO_MESSAGE, expiry.date().isoformat()))
     return errors
 
 
@@ -578,14 +583,19 @@ def feide_check_report(findings: set[Finding], args: argparse.Namespace) -> int:
     attributes are printed, counted and returned, and with --exclude the
     findings of those accounts are left out the same way, while the state
     file still records every finding. An --exclude name that was not
-    scanned stops the report before anything is printed. Returns the exit code: 0 for no findings, 1
-    for findings, 2 when the state file cannot be saved."""
+    scanned stops the report before anything is printed. Information
+    (a future expiry date) is printed on INFO lines with its own total and
+    is left out of the state file and the exit code. Returns the exit code:
+    0 for no findings, 1 for findings, 2 when the state file cannot be
+    saved."""
     excepted: list[tuple[Finding, str]] = []
     open_findings: set[Finding] = set()
     unknown: list[str] = sorted(args.excluded - args.scanned)
     if unknown:
         print(f"feide_check: --exclude: {', '.join(unknown)} not found among the scanned accounts", file=sys.stderr)
         return 2
+    info: set[Finding] = {finding for finding in findings if finding[3] == FEIDE_CHECK_EXPIRES_INFO_MESSAGE}
+    findings = findings - info
     for finding in findings:
         reason = feide_check_exception(finding, args)
         if reason is None:
@@ -600,19 +610,22 @@ def feide_check_report(findings: set[Finding], args: argparse.Namespace) -> int:
     only: set[str] = {name.strip().lower() for name in args.only.split(",") if name.strip()}
     if only:
         findings = {finding for finding in findings if finding[2].lower() in only}
+        info = {finding for finding in info if finding[2].lower() in only}
         excepted = [(finding, reason) for finding, reason in excepted if finding[2].lower() in only]
         new = [line for line in new if line.split("\t")[1].lower() in only]
         fixed = {line for line in fixed if line.split("\t")[1].lower() in only}
     if args.excluded:
         findings = {finding for finding in findings if feide_check_cn(finding[0]) not in args.excluded}
+        info = {finding for finding in info if feide_check_cn(finding[0]) not in args.excluded}
         excepted = [(finding, reason) for finding, reason in excepted if feide_check_cn(finding[0]) not in args.excluded]
         new = [line for line in new if feide_check_cn(line.split("\t")[0]) not in args.excluded]
         fixed = {line for line in fixed if feide_check_cn(line.split("\t")[0]) not in args.excluded}
     hidden: set[Finding] = {finding for finding in findings if finding[3] in (FEIDE_CHECK_HIDE_EXTRA_MESSAGE, FEIDE_CHECK_HIDE_TYPO_MESSAGE)}
-    # Every finding row starts with a status column (empty, EXCEPTED or
-    # NEW), so the DN is always the second field.
+    # Every finding row starts with a status column (empty, EXCEPTED, INFO
+    # or NEW), so the DN is always the second field.
     rows: list[list[str]] = [[""] + feide_check_fields(finding) for finding in sorted(findings - hidden)]
     rows += [["EXCEPTED"] + feide_check_fields(finding) + [reason] for finding, reason in sorted(excepted)]
+    rows += [["INFO"] + feide_check_fields(finding) for finding in sorted(info)]
     rows += [[""] + feide_check_fields(finding) for finding in sorted(hidden)]
     rows += [["NEW"] + line.split("\t") for line in new]
     feide_check_print_table(rows)
@@ -622,6 +635,8 @@ def feide_check_report(findings: set[Finding], args: argparse.Namespace) -> int:
     totals: list[list[str]] = [["TOTAL", str(len(users[message])), message] for message in sorted(users)]
     if excepted:
         totals.append(["TOTAL", str(len(excepted)), "Excepted"])
+    if info:
+        totals.append(["TOTAL", str(len(info)), "Info"])
     if previous is not None:
         totals.append(["TOTAL", str(len(new)), "New since the previous scan"])
         totals.append(["TOTAL", str(len(fixed)), "Fixed since the previous scan"])
