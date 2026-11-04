@@ -24,10 +24,19 @@
 # that moment. Each request runs in its own thread with its own Active
 # Directory connection; nothing shared is changed after start-up.
 #
-# Searches: the request filter is translated to Active Directory where an
-# attribute has a direct counterpart, only to narrow the Active Directory
-# search. The original filter is then evaluated here against the entry as
-# FEIDE sees it, because slapd does not test filters for back-sock.
+# Searches: no text from the request reaches Active Directory. Every search
+# fetches the people with a fixed filter, and the request filter is
+# evaluated here against each entry as FEIDE sees it (slapd does not test
+# filters for back-sock). The one exception is a filter that asks for one
+# uid, (uid=<name>) alone or inside an &: the name is checked against the
+# account pattern and the allowed characters, rebuilt from the program's
+# own character list, and only that rebuilt name narrows the search.
+#
+# Account names: every name taken from a request (a uid in a filter, a
+# search base or a bind DN) is accepted only when each character is a
+# letter, digit, ".", "-" or "_", and is then rebuilt character by
+# character from that list, so Active Directory only ever sees a name made
+# by this program. The bind password is the one value passed on as sent.
 #
 # Binds: the DN uid=<name>,ou=people,<base> becomes a simple bind to Active
 # Directory as <name>@<domain>, so Active Directory checks the password.
@@ -153,16 +162,9 @@ FEIDE_PEOPLE_SERVICE_AUTHN_LEVEL: str = "urn:mace:feide.no:spid:all urn:mace:fei
 # Longest request line accepted from slapd, so a broken peer cannot exhaust memory.
 FEIDE_PEOPLE_MAX_LINE: int = 65536
 
-# FEIDE attribute (lower case) -> Active Directory attribute, used only to
-# narrow the Active Directory search. Anything not listed is evaluated here.
-FEIDE_PEOPLE_FILTER_MAP: dict[str, str] = {
-    "uid": "sAMAccountName",
-    "edupersonprincipalname": "userPrincipalName",
-    "mail": "mail",
-    "givenname": "givenName",
-    "sn": "sn",
-    "mobile": "mobile",
-}
+# Characters an account name taken from a request may hold. Names are
+# rebuilt from this string, never passed on as received.
+FEIDE_PEOPLE_ACCOUNT_CHARS: str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.-_"
 
 FEIDE_PEOPLE_LDAP_SUCCESS: int = 0
 FEIDE_PEOPLE_LDAP_PROTOCOL_ERROR: int = 2
@@ -242,6 +244,15 @@ def feide_people_config() -> Config:
     return config
 
 
+def feide_people_clean_account(text: str) -> Optional[str]:
+    """Takes an account name from a request; returns it rebuilt character by
+    character from FEIDE_PEOPLE_ACCOUNT_CHARS, or None when it is empty or
+    holds any other character."""
+    if not text or any(char not in FEIDE_PEOPLE_ACCOUNT_CHARS for char in text):
+        return None
+    return "".join(FEIDE_PEOPLE_ACCOUNT_CHARS[FEIDE_PEOPLE_ACCOUNT_CHARS.index(char)] for char in text)
+
+
 def feide_people_is_person(config: Config, account: str) -> bool:
     """Takes an sAMAccountName; returns True when it matches the account
     pattern in full and is not on the blocklist."""
@@ -317,17 +328,6 @@ def feide_people_filter_unescape(text: str) -> str:
             out += raw[i:i + 1]
             i += 1
     return out.decode("utf-8", errors="replace")
-
-
-def feide_people_filter_escape(text: str) -> str:
-    """Takes a value; returns it escaped for use inside an LDAP filter."""
-    out: list[str] = []
-    for char in text:
-        if char in "\\*()\x00":
-            out.append("\\%02x" % ord(char))
-        else:
-            out.append(char)
-    return "".join(out)
 
 
 def feide_people_filter_parse(text: str) -> FilterTree:
@@ -437,38 +437,27 @@ def feide_people_filter_substring(value: str, initial: str, middle: list[str], f
     return value.endswith(final) and len(value) - len(final) >= pos
 
 
-def feide_people_filter_to_ad(tree: FilterTree) -> Optional[str]:
-    """Takes a parsed filter; returns an Active Directory filter that selects
-    a superset of the matches, or None for no narrowing. >=, <= and ~= are
-    never narrowed: Active Directory compares them differently from this
-    program, so under a ! the narrowing could drop entries that match."""
-    kind = tree[0]
-    if kind in ("ge", "le", "approx"):
-        return None
-    if kind == "and":
-        parts = [p for p in (feide_people_filter_to_ad(child) for child in tree[1]) if p is not None]
-        if not parts:
-            return None
-        return parts[0] if len(parts) == 1 else "(&" + "".join(parts) + ")"
-    if kind == "or":
-        parts_or = [feide_people_filter_to_ad(child) for child in tree[1]]
-        if not parts_or or None in parts_or:
-            return None
-        return "(|" + "".join(part for part in parts_or if part is not None) + ")"
-    if kind == "not":
-        part = feide_people_filter_to_ad(tree[1])
-        return None if part is None else "(!" + part + ")"
-    if kind in ("const", "unknown"):
-        return None
-    ad_attr = FEIDE_PEOPLE_FILTER_MAP.get(tree[1])
-    if ad_attr is None:
-        return None
-    if kind == "present":
-        return "(" + ad_attr + "=*)"
-    if kind == "sub":
-        pieces = [feide_people_filter_escape(tree[2])] + [feide_people_filter_escape(p) for p in tree[3]] + [feide_people_filter_escape(tree[4])]
-        return "(" + ad_attr + "=" + "*".join(pieces) + ")"
-    return "(" + ad_attr + "=" + feide_people_filter_escape(tree[2]) + ")"
+def feide_people_filter_uid(config: Config, tree: FilterTree) -> tuple[bool, Optional[str]]:
+    """Takes a parsed filter; returns (search Active Directory, narrowing
+    filter). A filter that asks for one uid, alone or as a direct part of an
+    &, narrows the search to that account when the name is a valid person
+    name, and skips Active Directory when it is not, since no person can
+    match. Any other filter gives no narrowing. The narrowing is built only
+    from the cleaned, rebuilt name."""
+    wanted: Optional[str] = None
+    if tree[0] == "eq" and tree[1] == "uid":
+        wanted = tree[2]
+    elif tree[0] == "and":
+        for child in tree[1]:
+            if child[0] == "eq" and child[1] == "uid":
+                wanted = child[2]
+                break
+    if wanted is None:
+        return True, None
+    account = feide_people_clean_account(wanted)
+    if account is None or not feide_people_is_person(config, account):
+        return False, None
+    return True, "(sAMAccountName=" + account + ")"
 
 
 # ---------------------------------------------------------------------------
@@ -654,16 +643,24 @@ def feide_people_ad_lookup(config: Config, uid: str) -> Optional[AdAttrs]:
     """Takes an sAMAccountName; returns the attributes of that user, enabled
     or not, so the caller can log the real reason for a refusal, or None
     when Active Directory has no user by that name."""
-    found = list(feide_people_ad_search(config, "(sAMAccountName=" + feide_people_filter_escape(uid) + ")", 1, include_disabled=True))
+    account = feide_people_clean_account(uid)
+    if account is None:
+        return None
+    found = list(feide_people_ad_search(config, "(sAMAccountName=" + account + ")", 1, include_disabled=True))
     return found[0] if found else None
 
 
 def feide_people_ad_bind(config: Config, uid: str, password: str) -> int:
     """Takes an sAMAccountName and a password; returns the LDAP result code of
-    a simple bind to Active Directory as uid@DOMAIN."""
+    a simple bind to Active Directory as uid@DOMAIN. The name is cleaned
+    and rebuilt first; a name that fails gets invalid credentials without
+    Active Directory being asked."""
+    account = feide_people_clean_account(uid)
+    if account is None:
+        return FEIDE_PEOPLE_LDAP_INVALID_CREDENTIALS
     conn = feide_people_ad_open(config)
     try:
-        conn.simple_bind_s(uid + "@" + config["DOMAIN"], password)
+        conn.simple_bind_s(account + "@" + config["DOMAIN"], password)
         return FEIDE_PEOPLE_LDAP_SUCCESS
     except ldap.INVALID_CREDENTIALS:
         return FEIDE_PEOPLE_LDAP_INVALID_CREDENTIALS
@@ -744,7 +741,7 @@ def feide_people_search(config: Config, request: Request, write: Callable[[str],
         raise feide_people_bad_request("unsupported scope %d" % scope)
     limit = feide_people_int_field(request, "sizelimit", -1)
     tree = feide_people_filter_parse(request.get("filter", "(objectClass=*)"))
-    ad_filter = feide_people_filter_to_ad(tree)
+    search_ad, ad_filter = feide_people_filter_uid(config, tree)
     try:
         base_normalized = feide_people_normalize_dn(base)
     except ldap.DECODING_ERROR:
@@ -754,12 +751,12 @@ def feide_people_search(config: Config, request: Request, write: Callable[[str],
     if base_normalized == config["PEOPLE_DN_NORMALIZED"]:
         if scope in (ldap.SCOPE_BASE, ldap.SCOPE_SUBTREE):
             candidates.append(feide_people_people_entry(config))
-        users = scope in (ldap.SCOPE_ONELEVEL, ldap.SCOPE_SUBTREE)
+        users = search_ad and scope in (ldap.SCOPE_ONELEVEL, ldap.SCOPE_SUBTREE)
     else:
         uid = feide_people_uid_from_dn(config, base)
         if uid is None:
             return FEIDE_PEOPLE_LDAP_NO_SUCH_OBJECT, config["PEOPLE_DN"], 0
-        if not feide_people_is_person(config, uid):
+        if feide_people_clean_account(uid) is None or not feide_people_is_person(config, uid):
             feide_people_filtered("SEARCH", uid, request, "not a person")
             return FEIDE_PEOPLE_LDAP_NO_SUCH_OBJECT, config["PEOPLE_DN"], 0
         # A person entry is a leaf: base and subtree both mean the entry
@@ -825,7 +822,7 @@ def feide_people_bind(config: Config, request: Request) -> int:
         return FEIDE_PEOPLE_LDAP_INVALID_CREDENTIALS
     if feide_people_is_system_user(config, dn):
         return feide_people_ad_bind(config, uid, password)
-    if not feide_people_is_person(config, uid):
+    if feide_people_clean_account(uid) is None or not feide_people_is_person(config, uid):
         feide_people_filtered("BIND", uid, request, "not a person")
         return FEIDE_PEOPLE_LDAP_INVALID_CREDENTIALS
     ad = feide_people_ad_lookup(config, uid)

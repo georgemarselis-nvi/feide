@@ -181,6 +181,13 @@ Active Directory, so the rules below are Active Directory rules, not proxy rules
 - The norEdu schema file states no version of its own, so norEduOrgSchemaVersion
   is set by hand in .env (NOREDUORGSCHEMAVERSION, currently 2.0) and written into
   the organisation entry at startup.
+- No text from a request reaches Active Directory. The proxy fetches people with
+  a fixed filter and evaluates Sikt's filter itself. An account name taken from a
+  request (a uid in a filter, a search base or a bind DN) is accepted only when it
+  holds letters, digits, ".", "-" and "_" and matches the account pattern; it is
+  then rebuilt from the program's own character list, and only the rebuilt name
+  is sent to Active Directory. The bind password is the one value passed on as
+  sent, since Active Directory has to check it.
 
 
 ## Operation
