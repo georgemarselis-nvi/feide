@@ -161,6 +161,10 @@ FEIDE_PEOPLE_SMS_METHOD: str = "urn:mace:feide.no:auth:method:sms"
 FEIDE_PEOPLE_SERVICE_AUTHN_LEVEL: str = "urn:mace:feide.no:spid:all urn:mace:feide.no:auth:level:fad08:3"
 # Longest request line accepted from slapd, so a broken peer cannot exhaust memory.
 FEIDE_PEOPLE_MAX_LINE: int = 65536
+# Deepest filter nesting accepted. Deeper filters are refused as a bad
+# request instead of exhausting Python's recursion limit and killing the
+# thread without an answer.
+FEIDE_PEOPLE_MAX_FILTER_DEPTH: int = 32
 
 # Characters an account name taken from a request may hold. Names are
 # rebuilt from this string, never passed on as received.
@@ -333,15 +337,19 @@ def feide_people_filter_unescape(text: str) -> str:
 def feide_people_filter_parse(text: str) -> FilterTree:
     """Takes a filter string; returns the parsed filter. Raises ValueError or
     IndexError for a malformed filter."""
-    tree, pos = feide_people_filter_parse_at(text, 0)
+    tree, pos = feide_people_filter_parse_at(text, 0, 1)
     if pos != len(text):
         raise ValueError("trailing characters in filter")
     return tree
 
 
-def feide_people_filter_parse_at(text: str, pos: int) -> tuple[FilterTree, int]:
-    """Takes a filter string and a position at an opening parenthesis;
-    returns the filter parsed from there and the position after it."""
+def feide_people_filter_parse_at(text: str, pos: int, depth: int) -> tuple[FilterTree, int]:
+    """Takes a filter string, a position at an opening parenthesis and the
+    nesting depth there; returns the filter parsed from there and the
+    position after it. Raises ValueError when the nesting is deeper than
+    FEIDE_PEOPLE_MAX_FILTER_DEPTH."""
+    if depth > FEIDE_PEOPLE_MAX_FILTER_DEPTH:
+        raise ValueError("filter nested deeper than %d" % FEIDE_PEOPLE_MAX_FILTER_DEPTH)
     if text[pos] != "(":
         raise ValueError("filter does not start with (")
     pos += 1
@@ -350,13 +358,13 @@ def feide_people_filter_parse_at(text: str, pos: int) -> tuple[FilterTree, int]:
         pos += 1
         children: list[FilterTree] = []
         while text[pos] == "(":
-            child, pos = feide_people_filter_parse_at(text, pos)
+            child, pos = feide_people_filter_parse_at(text, pos, depth + 1)
             children.append(child)
         if text[pos] != ")":
             raise ValueError("unterminated filter list")
         return ("and" if op == "&" else "or", children), pos + 1
     if op == "!":
-        child, pos = feide_people_filter_parse_at(text, pos + 1)
+        child, pos = feide_people_filter_parse_at(text, pos + 1, depth + 1)
         if text[pos] != ")":
             raise ValueError("unterminated not")
         return ("not", child), pos + 1
