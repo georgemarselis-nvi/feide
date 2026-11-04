@@ -28,10 +28,10 @@
 # starts as root, loads the rate limit on 636 (config/ratelimit.nft, at
 # most 100 new connections a second) and then runs as the ldap user.
 #
-# The entrypoint reads .env, fills the slapd.conf and organisation
-# entry templates, prints the settings it is running with, starts
-# feide_people.py (which answers for ou=people over back-sock) and
-# starts slapd on LDAPS only.
+# The entrypoint reads .env, fills the slapd.conf template, prints the
+# settings it is running with, starts feide_people.py (which answers the
+# organisation entry and ou=people over back-sock) and starts slapd on
+# LDAPS only.
 #
 # Red Hat does not ship openldap-servers in RHEL 9 itself; it comes
 # from EPEL 9, which is why EPEL is enabled below.
@@ -71,7 +71,6 @@ COPY schema/eduorg.schema /etc/openldap/schema/eduorg.schema
 COPY schema/52-noredu.ldif /etc/openldap/schema/52-noredu.ldif
 COPY schema/noredu.schema /etc/openldap/schema/noredu.schema
 COPY config/slapd.conf.template /etc/openldap/slapd.conf.template
-COPY schema/org.ldif.template /etc/openldap/org.ldif.template
 COPY config/ratelimit.nft /etc/nftables/feide-ratelimit.nft
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY scripts/feide_people.py /usr/local/bin/feide_people.py
@@ -81,7 +80,7 @@ COPY scripts/feide_people.py /usr/local/bin/feide_people.py
 # to make sure it is never picked up by mistake.
 RUN /usr/bin/rm -rf /etc/openldap/slapd.d
 RUN /usr/bin/mkdir -p /etc/feide /etc/openldap/certs /var/run/openldap
-RUN /usr/bin/chown -R ldap:ldap /etc/openldap /var/run/openldap /var/lib/ldap
+RUN /usr/bin/chown -R ldap:ldap /etc/openldap /var/run/openldap
 RUN /usr/bin/chmod 0755 /usr/local/bin/entrypoint.sh /usr/local/bin/feide_people.py
 
 VOLUME ["/etc/feide", "/etc/openldap/certs"]

@@ -21,11 +21,11 @@
 #
 # Reads /etc/feide/.env, written on the host by orchestrator.sh, and
 # refuses to start if any value it needs is missing. Derives the LDAP
-# base DN from DOMAIN (dfo.no -> dc=dfo,dc=no). Fills slapd.conf and
-# the organisation LDIF from their templates, checks the configuration
-# with slaptest, loads the organisation entry into the empty local
-# database on first start, prints every setting with the organisation
-# number first and hands over to slapd on LDAPS only.
+# base DN from DOMAIN (dfo.no -> dc=dfo,dc=no). Fills slapd.conf from
+# its template, checks it with slaptest, prints every setting with the
+# organisation number first, starts feide_people.py (which answers the
+# organisation entry and the people) and hands over to slapd on LDAPS
+# only.
 #
 # Nothing here is interactive and nothing here writes a secret: the
 # keytab, the certificate and the key are mounted in by the host.
@@ -42,8 +42,6 @@ ENTRYPOINT_CERT=/etc/openldap/certs/fullchain.pem
 ENTRYPOINT_KEY=/etc/openldap/certs/privkey.pem
 ENTRYPOINT_AD_CA=/etc/openldap/certs/ad-ca.pem
 ENTRYPOINT_CONF=/etc/openldap/slapd.conf
-ENTRYPOINT_ORG_LDIF=/etc/openldap/org.ldif
-ENTRYPOINT_DB_DIR=/var/lib/ldap
 ENTRYPOINT_PEOPLE=/usr/local/bin/feide_people.py
 ENTRYPOINT_PEOPLE_SOCKET=/var/run/openldap/feide-people.sock
 ENTRYPOINT_RATELIMIT=/etc/nftables/feide-ratelimit.nft
@@ -79,20 +77,10 @@ entrypoint_derive() {
 	# without it the whole domain is searched.
 	AD_BASE_DN=${AD_BASE_DN:-$(echo "$BASE_DN" | /usr/bin/tr 'a-z' 'A-Z')}
 	DC=$(echo "$DOMAIN" | /usr/bin/cut -d. -f1)
-	ORG_MAIL_LINES=$(entrypoint_mail_lines)
 	FEIDE_PEOPLE_SOCKET=$ENTRYPOINT_PEOPLE_SOCKET
 	FEIDE_PEOPLE_AD_CA=$ENTRYPOINT_AD_CA
-	export BASE_DN AD_BASE_DN DC ORG_MAIL_LINES DOMAIN NAVN ORGANISASJONSNUMMER NOREDUORGACRONYM NOREDUORGSCHEMAVERSION AD_SERVER SIKT_BIND_DN ORG_MAIL EDUPERSONAFFILIATION FEIDE_PEOPLE_ACCOUNT_PATTERN FEIDE_PEOPLE_SOCKET FEIDE_PEOPLE_AD_CA
+	export BASE_DN AD_BASE_DN DC DOMAIN NAVN ORGANISASJONSNUMMER NOREDUORGACRONYM NOREDUORGSCHEMAVERSION AD_SERVER SIKT_BIND_DN ORG_MAIL EDUPERSONAFFILIATION FEIDE_PEOPLE_ACCOUNT_PATTERN FEIDE_PEOPLE_SOCKET FEIDE_PEOPLE_AD_CA
 	export FEIDE_PEOPLE_ACCOUNT_BLOCKLIST="${FEIDE_PEOPLE_ACCOUNT_BLOCKLIST:-}"
-}
-
-# ORG_MAIL is a space separated list of addresses. mail is a
-# multi-valued attribute, so the organisation entry gets one line
-# per address.
-entrypoint_mail_lines() {
-	for addr in $ORG_MAIL; do
-		echo "mail: $addr"
-	done
 }
 
 entrypoint_check_mounts() {
@@ -104,17 +92,7 @@ entrypoint_check_mounts() {
 
 entrypoint_render() {
 	/usr/bin/envsubst < /etc/openldap/slapd.conf.template > "$ENTRYPOINT_CONF"
-	/usr/bin/envsubst < /etc/openldap/org.ldif.template > "$ENTRYPOINT_ORG_LDIF"
 	/usr/sbin/slaptest -Q -f "$ENTRYPOINT_CONF" || entrypoint_fail "slapd.conf did not pass slaptest"
-}
-
-# Loads the organisation entry once. mdb creates data.mdb on first
-# use, so its absence means the database has never been populated.
-# -g keeps slapadd out of the back-sock database, which cannot take
-# entries.
-entrypoint_load_org() {
-	[ -f "$ENTRYPOINT_DB_DIR/data.mdb" ] && return 0
-	/usr/sbin/slapadd -q -g -f "$ENTRYPOINT_CONF" -b "$BASE_DN" -l "$ENTRYPOINT_ORG_LDIF" || entrypoint_fail "could not load the organisation entry"
 }
 
 entrypoint_summary() {
@@ -148,7 +126,7 @@ entrypoint_summary() {
 }
 
 # Starts feide_people.py in the background and waits up to ten seconds
-# for its socket; slapd cannot answer for ou=people without it.
+# for its socket; slapd cannot answer anything without it.
 entrypoint_start_people() {
 	/usr/bin/python3 "$ENTRYPOINT_PEOPLE" &
 	for second in 1 2 3 4 5 6 7 8 9 10; do
@@ -172,7 +150,6 @@ entrypoint_main() {
 	entrypoint_derive
 	entrypoint_check_mounts
 	entrypoint_render
-	entrypoint_load_org
 	entrypoint_summary
 	entrypoint_start_people
 	exec /usr/sbin/slapd -d stats -f "$ENTRYPOINT_CONF" -h "ldaps:///"

@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # feide_people.py
-# Answers slapd's requests for ou=people over the back-sock socket: reads people live from Active Directory and returns them with the values FEIDE expects.
+# Answers slapd's requests for the whole directory over the back-sock socket: the organisation entry from .env, and people read live from Active Directory with the values FEIDE expects.
 #
 # Copyright (C) 2026 George Marselis <george.marselis@vetinst.no>
 #
@@ -18,10 +18,11 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 # How it fits: slapd owns the LDAPS listener, TLS and the ACLs. For every
-# operation under ou=people it opens this program's Unix socket, writes the
-# request as plain text (slapd-sock(5)) and relays whatever comes back.
-# Nothing is stored here; every answer is read from Active Directory at
-# that moment. Each request runs in its own thread with its own Active
+# operation under the base DN it opens this program's Unix socket, writes
+# the request as plain text (slapd-sock(5)) and relays whatever comes back.
+# Nothing is stored here. The organisation entry (the base DN itself) is
+# built from .env values at start-up; every person is read from Active
+# Directory at that moment. Each request runs in its own thread with its own Active
 # Directory connection; nothing shared is changed after start-up.
 #
 # Searches: no text from the request reaches Active Directory. Every search
@@ -149,7 +150,8 @@ FEIDE_PEOPLE_PLACEHOLDER_PHONE: str = "+4700000000"
 # largest value both mean the account never expires.
 FEIDE_PEOPLE_FILETIME_EPOCH: datetime.datetime = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc)
 FEIDE_PEOPLE_FILETIME_NEVER: int = 0x7FFFFFFFFFFFFFFF
-FEIDE_PEOPLE_REQUIRED_ENV: tuple[str, ...] = ("FEIDE_PEOPLE_SOCKET", "FEIDE_PEOPLE_AD_CA", "AD_SERVER", "DOMAIN", "BASE_DN", "AD_BASE_DN", "EDUPERSONAFFILIATION", "SIKT_BIND_DN", "FEIDE_PEOPLE_ACCOUNT_PATTERN")
+FEIDE_PEOPLE_REQUIRED_ENV: tuple[str, ...] = ("FEIDE_PEOPLE_SOCKET", "FEIDE_PEOPLE_AD_CA", "AD_SERVER", "DOMAIN", "BASE_DN", "AD_BASE_DN", "EDUPERSONAFFILIATION", "SIKT_BIND_DN", "FEIDE_PEOPLE_ACCOUNT_PATTERN", "DC", "NAVN", "ORGANISASJONSNUMMER", "NOREDUORGACRONYM", "NOREDUORGSCHEMAVERSION", "ORG_MAIL")
+FEIDE_PEOPLE_ORG_OBJECTCLASSES: list[str] = ["top", "dcObject", "organization", "eduOrg", "norEduOrg"]
 FEIDE_PEOPLE_COMMANDS: tuple[str, ...] = ("SEARCH", "BIND", "UNBIND")
 # Norwegian letters, and ö, -> ASCII, for uid and mail, which FEIDE takes in ASCII only.
 FEIDE_PEOPLE_ASCII_MAP: dict[int, str] = str.maketrans({"å": "a", "æ": "ae", "ø": "o", "ö": "o", "Å": "A", "Æ": "AE", "Ø": "O", "Ö": "O"})
@@ -244,6 +246,7 @@ def feide_people_config() -> Config:
     config["AFFILIATIONS"] = config["EDUPERSONAFFILIATION"].split()
     config["PEOPLE_DN"] = "ou=people," + config["BASE_DN"]
     config["PEOPLE_DN_NORMALIZED"] = feide_people_normalize_dn(config["PEOPLE_DN"])
+    config["BASE_DN_NORMALIZED"] = feide_people_normalize_dn(config["BASE_DN"])
     config["SIKT_BIND_DN_NORMALIZED"] = feide_people_normalize_dn(config["SIKT_BIND_DN"])
     config["BLOCKLIST"] = {name.lower() for name in os.environ.get("FEIDE_PEOPLE_ACCOUNT_BLOCKLIST", "").split()}
     return config
@@ -560,6 +563,23 @@ def feide_people_people_entry(config: Config) -> tuple[str, Entry]:
     return config["PEOPLE_DN"], {"objectclass": ["top", "organizationalUnit"], "ou": ["people"]}
 
 
+def feide_people_org_entry(config: Config) -> tuple[str, Entry]:
+    """Takes the configuration; returns (DN, entry) for the organisation,
+    the base DN itself, with the mandatory attributes of the FEIDE
+    higher-education model. The organisation number must match
+    Brønnøysundregisteret exactly."""
+    return config["BASE_DN"], {
+        "objectclass": list(FEIDE_PEOPLE_ORG_OBJECTCLASSES),
+        "dc": [config["DC"]],
+        "o": [config["NAVN"]],
+        "eduorglegalname": [config["NAVN"]],
+        "noreduorgnin": ["NO" + config["ORGANISASJONSNUMMER"]],
+        "noreduorgacronym": [config["NOREDUORGACRONYM"]],
+        "noreduorgschemaversion": [config["NOREDUORGSCHEMAVERSION"]],
+        "mail": config["ORG_MAIL"].split(),
+    }
+
+
 # Output names, since entries are keyed in lower case for filter matching.
 FEIDE_PEOPLE_ATTR_NAMES: dict[str, str] = {
     "objectclass": "objectClass", "uid": "uid", "cn": "cn", "displayname": "displayName",
@@ -569,6 +589,8 @@ FEIDE_PEOPLE_ATTR_NAMES: dict[str, str] = {
     "edupersonorgdn": "eduPersonOrgDN", "schachomeorganization": "schacHomeOrganization", "ou": "ou",
     "noredupersonauthnmethod": "norEduPersonAuthnMethod",
     "noredupersonserviceauthnlevel": "norEduPersonServiceAuthnLevel",
+    "dc": "dc", "o": "o", "eduorglegalname": "eduOrgLegalName", "noreduorgnin": "norEduOrgNIN",
+    "noreduorgacronym": "norEduOrgAcronym", "noreduorgschemaversion": "norEduOrgSchemaVersion",
 }
 
 
@@ -757,7 +779,15 @@ def feide_people_search(config: Config, request: Request, write: Callable[[str],
         return FEIDE_PEOPLE_LDAP_INVALID_DN_SYNTAX, "", 0
     candidates: list[tuple[str, Entry]] = []
 
-    if base_normalized == config["PEOPLE_DN_NORMALIZED"]:
+    if base_normalized == config["BASE_DN_NORMALIZED"]:
+        # The organisation: base is the entry itself, one level is
+        # ou=people, subtree is all of it and children all but the entry.
+        if scope in (ldap.SCOPE_BASE, ldap.SCOPE_SUBTREE):
+            candidates.append(feide_people_org_entry(config))
+        if scope in (ldap.SCOPE_ONELEVEL, ldap.SCOPE_SUBTREE, FEIDE_PEOPLE_SCOPE_CHILDREN):
+            candidates.append(feide_people_people_entry(config))
+        users = search_ad and scope in (ldap.SCOPE_SUBTREE, FEIDE_PEOPLE_SCOPE_CHILDREN)
+    elif base_normalized == config["PEOPLE_DN_NORMALIZED"]:
         if scope in (ldap.SCOPE_BASE, ldap.SCOPE_SUBTREE):
             candidates.append(feide_people_people_entry(config))
         users = search_ad and scope in (ldap.SCOPE_ONELEVEL, ldap.SCOPE_SUBTREE, FEIDE_PEOPLE_SCOPE_CHILDREN)

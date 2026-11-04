@@ -18,17 +18,15 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
-# Layout:
+# Layout: one back-sock database for the whole tree. Every request is
+# handed to scripts/feide_people.py over a Unix socket. It answers
 #
-#   ${BASE_DN}                     local mdb database, holds exactly one
-#                                  entry: the organisation (norEduOrg)
-#   ou=people,${BASE_DN}           back-sock subordinate: every request is
-#                                  handed to scripts/feide_people.py over a
-#                                  Unix socket, which reads Active Directory
-#                                  at ${AD_BASE_DN} and formats the values
+#   ${BASE_DN}                     the organisation (norEduOrg), built from
+#                                  .env at start-up
+#   ou=people,${BASE_DN}           people, read from Active Directory at
+#                                  ${AD_BASE_DN} and formatted
 #
-# Nothing about a user is stored here. Every person entry Sikt reads is
-# fetched from Active Directory at that moment by feide_people.py.
+# Nothing is stored here. There is no local database.
 
 include		/etc/openldap/schema/core.schema
 include		/etc/openldap/schema/cosine.schema
@@ -42,7 +40,6 @@ pidfile		/var/run/openldap/slapd.pid
 argsfile	/var/run/openldap/slapd.args
 
 modulepath	/usr/lib64/openldap
-moduleload	back_mdb.la
 moduleload	back_sock.la
 
 # TLS. The certificate and key come from certbot on the host and are
@@ -73,27 +70,13 @@ access to dn.subtree="${BASE_DN}"
 	by * auth
 
 #
-# 1. People: handed to feide_people.py.
-#
-# A subordinate database must come before its superior in slapd.conf;
-# slapd looks for the superior among the databases defined after it.
+# The whole tree: handed to feide_people.py.
 #
 database	sock
-suffix		"ou=people,${BASE_DN}"
-subordinate
+suffix		"${BASE_DN}"
 rootdn		"cn=admin,${BASE_DN}"
 readonly	on
 socketpath	/var/run/openldap/feide-people.sock
-
 # Every request carries the DN the connection is bound as, so
 # feide_people.py can refuse searches from anyone but the system user.
 extensions	binddn
-
-#
-# 2. The organisation entry: local, static, one entry.
-#
-database	mdb
-suffix		"${BASE_DN}"
-rootdn		"cn=admin,${BASE_DN}"
-directory	/var/lib/ldap
-maxsize		10485760

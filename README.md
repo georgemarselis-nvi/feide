@@ -76,7 +76,8 @@ This list has two halves:
 - TLSProtocolMin 3.3 (TLS 1.2), per the requirement above.
 - The norEdu schema is loaded as delivered by Sikt (schema/52-noredu.ldif)
 - The directory carries one organisation entry (norEduOrg) with the organisation
-  number, the legal name, the acronym and the schema version.
+  number, the legal name, the acronym and the schema version. The proxy builds it
+  from .env at startup; nothing is stored.
 - The organisation number must match Brønnøysundregisteret exactly. A mismatch
   breaks service activation for individual units. NVI is 970955623.
 - Sikt has an LDAP crawler which reads the whole subtree under the base DN every 12
@@ -179,8 +180,8 @@ Active Directory, so the rules below are Active Directory rules, not proxy rules
   per user needs storing. Values like this are given to the container as
   environment variables and written into the configuration template at startup.
 - The norEdu schema file states no version of its own, so norEduOrgSchemaVersion
-  is set by hand in .env (NOREDUORGSCHEMAVERSION, currently 2.0) and written into
-  the organisation entry at startup.
+  is set by hand in .env (NOREDUORGSCHEMAVERSION, currently 2.0) and used for the
+  organisation entry at startup.
 - No text from a request reaches Active Directory. The proxy fetches people with
   a fixed filter and evaluates Sikt's filter itself. An account name taken from a
   request (a uid in a filter, a search base or a bind DN) is accepted only when it
