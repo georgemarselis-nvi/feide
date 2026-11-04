@@ -36,7 +36,7 @@ Only the findings for some attributes, comma separated:
 
     scripts/feide_scanner.py --uri ldap://dc01.example.no --only mail,mobile
 
---only takes the attribute names in the second column of the output;
+--only takes the attribute names in the third column of the output;
 an unknown name stops the scanner with the list of valid ones. Tab
 completion for them, installed once:
 
@@ -72,11 +72,18 @@ server type. The pattern must match the whole uid, case ignored.
 
 ## Output
 
-One tab separated line per finding, then one TOTAL line per message
-with the number of accounts it applies to:
+One line per finding, then one TOTAL line per message with the number
+of accounts it applies to:
 
-    <DN>	<attribute>	<message>	<value>
+    <status>	<DN>	<attribute>	<message>	<value>
     TOTAL	<count>	<message>
+
+The status is empty for an open finding, EXCEPTED (followed by the
+reason after the value) or NEW. Every column is padded with spaces to
+its widest value and followed by a tab, so the columns line up on screen
+and the output still splits on tabs; the finding lines and the TOTAL
+lines are each aligned on their own. Strip the padding when reading a
+field.
 
 ## Exceptions
 

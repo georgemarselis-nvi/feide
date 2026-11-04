@@ -19,8 +19,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
-# The account is taken from the CN= field of every finding line,
-# including NEW lines; each account is searched once.
+# The account is taken from the DN, the second tab separated field of
+# every finding line (EXCEPTED and NEW lines included); TOTAL lines are
+# skipped. Each account is searched once.
 #
 # Requires a valid Kerberos ticket (kinit).
 #
@@ -44,7 +45,7 @@ ldapsearch_usage() {
 # Takes a file (or /dev/stdin) of scanner output. Prints each account
 # once, case ignored.
 ldapsearch_accounts_in() {
-	/usr/bin/awk -F'\t' '{ for (i = 1; i <= NF; i++) if ($i ~ /^CN=/) { split($i, dn, ","); sub(/^CN=/, "", dn[1]); print dn[1] } }' "$1" | /usr/bin/sort -uf
+	/usr/bin/awk -F'\t' '$2 ~ /^CN=/ { split($2, dn, ","); sub(/^CN=/, "", dn[1]); print dn[1] }' "$1" | /usr/bin/sort -uf
 }
 
 # Takes a server, a base DN and a file of scanner output. Prints the

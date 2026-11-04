@@ -433,10 +433,32 @@ def feide_check_orgunits(conn: ldap.ldapobject.LDAPObject, attrs: Attrs, cache: 
 
 
 def feide_check_format(finding: Finding) -> str:
-    """Takes a finding; returns it as one tab separated output line: DN,
+    """Takes a finding; returns it as one tab separated state file line: DN,
     attribute, message and value."""
+    return "\t".join(feide_check_fields(finding))
+
+
+def feide_check_fields(finding: Finding) -> list[str]:
+    """Takes a finding; returns its output fields: DN, attribute, message
+    and value."""
     dn, _, attr, message, value = finding
-    return f"{dn}\t{attr}\t{message}\t{value!r}"
+    return [dn, attr, message, repr(value)]
+
+
+def feide_check_print_table(rows: list[list[str]]) -> None:
+    """Takes rows of fields; prints them with every column padded to its
+    widest value and a tab after each field, so the columns line up on
+    screen and the output still splits on tabs. The last field of a row
+    gets no padding, since nothing follows it."""
+    widths: list[int] = []
+    for row in rows:
+        for index, field in enumerate(row):
+            if index == len(widths):
+                widths.append(0)
+            widths[index] = max(widths[index], len(field))
+    for row in rows:
+        padded = [field.ljust(widths[index]) for index, field in enumerate(row[:-1])]
+        print("\t".join(padded + row[-1:]))
 
 
 def feide_check_load_state(path: str) -> Optional[set[str]]:
@@ -526,24 +548,23 @@ def feide_check_report(findings: set[Finding], args: argparse.Namespace) -> int:
         new = [line for line in new if line.split("\t")[1].lower() in only]
         fixed = {line for line in fixed if line.split("\t")[1].lower() in only}
     hidden: set[Finding] = {finding for finding in findings if finding[3] == FEIDE_CHECK_HIDE_EXTRA_MESSAGE}
-    for finding in sorted(findings - hidden):
-        print(feide_check_format(finding))
-    for finding, reason in sorted(excepted):
-        print(f"EXCEPTED\t{feide_check_format(finding)}\t{reason}")
-    for finding in sorted(hidden):
-        print(feide_check_format(finding))
-    for line in new:
-        print(f"NEW\t{line}")
+    # Every finding row starts with a status column (empty, EXCEPTED or
+    # NEW), so the DN is always the second field.
+    rows: list[list[str]] = [[""] + feide_check_fields(finding) for finding in sorted(findings - hidden)]
+    rows += [["EXCEPTED"] + feide_check_fields(finding) + [reason] for finding, reason in sorted(excepted)]
+    rows += [[""] + feide_check_fields(finding) for finding in sorted(hidden)]
+    rows += [["NEW"] + line.split("\t") for line in new]
+    feide_check_print_table(rows)
     users: collections.defaultdict[str, set[str]] = collections.defaultdict(set)
     for dn, _, _, message, _ in findings:
         users[message].add(dn)
-    for message in sorted(users):
-        print(f"TOTAL\t{len(users[message])}\t{message}")
+    totals: list[list[str]] = [["TOTAL", str(len(users[message])), message] for message in sorted(users)]
     if excepted:
-        print(f"TOTAL\t{len(excepted)}\tExcepted")
+        totals.append(["TOTAL", str(len(excepted)), "Excepted"])
     if previous is not None:
-        print(f"TOTAL\t{len(new)}\tNew since the previous scan")
-        print(f"TOTAL\t{len(fixed)}\tFixed since the previous scan")
+        totals.append(["TOTAL", str(len(new)), "New since the previous scan"])
+        totals.append(["TOTAL", str(len(fixed)), "Fixed since the previous scan"])
+    feide_check_print_table(totals)
     if args.full_scan:
         try:
             feide_check_save_state(args.state, lines)
