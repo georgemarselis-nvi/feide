@@ -42,6 +42,16 @@ completion for them, installed once:
 
     cp scripts/feide_scanner.bash-completion /etc/bash_completion.d/feide_scanner
 
+Every account except some, comma separated full account names:
+
+    scripts/feide_scanner.py --uri ldap://dc01.example.no --exclude ab1234,ab5678
+
+--exclude matches the CN of the DN, case ignored. A name that does not
+match --account-pattern, or that is not among the scanned accounts,
+stops the scanner with an error, so a typo never silently shows the
+account again. Like --only, it changes only what is printed; the state
+file still records every finding.
+
 --realm (example.no) and --base (DC=EXAMPLE,DC=NO) are derived from
 the host in --uri; pass them to override. --help lists every option.
 

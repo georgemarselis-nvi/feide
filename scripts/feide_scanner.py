@@ -117,12 +117,19 @@ def feide_check_parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--stale-days", type=int, default=180, help="Active Directory only: report accounts with no logon in this many days")
     parser.add_argument("--page-size", type=int, default=500, help="paged search page size")
     parser.add_argument("--only", default="", help="print only the findings for these attributes, comma separated and case ignored, for example --only mail,mobile; the state file still records every finding")
+    parser.add_argument("--exclude", default="", help="leave these accounts out of the printed findings, comma separated full account names (the CN) and case ignored, for example --exclude ab1234,ab5678; the state file still records every finding")
     args = parser.parse_args(argv)
     known: set[str] = {name.lower() for name in FEIDE_CHECK_REPORTED_ATTRS}
     unknown: list[str] = [name.strip() for name in args.only.split(",") if name.strip() and name.strip().lower() not in known]
     if unknown:
         parser.error(f"--only: unknown attribute {', '.join(unknown)}; the attributes are {', '.join(FEIDE_CHECK_REPORTED_ATTRS)}")
     args.account_re = re.compile(args.account_pattern, re.IGNORECASE) if args.account_pattern else None
+    args.excluded = {name.strip().lower() for name in args.exclude.split(",") if name.strip()}
+    if args.account_re is not None:
+        unmatched: list[str] = sorted(name for name in args.excluded if args.account_re.fullmatch(name) is None)
+        if unmatched:
+            parser.error(f"--exclude: {', '.join(unmatched)} does not match --account-pattern {args.account_pattern}")
+    args.scanned = set()
     args.blocked = {name.lower() for name in args.blocklist.split()}
     args.now = datetime.datetime.now(datetime.timezone.utc)
     args.full_scan = not args.account and args.filter is None
@@ -432,6 +439,15 @@ def feide_check_orgunits(conn: ldap.ldapobject.LDAPObject, attrs: Attrs, cache: 
     return errors
 
 
+def feide_check_cn(dn: str) -> str:
+    """Takes a DN; returns the value of its first RDN in lower case, the
+    account name --exclude matches against."""
+    try:
+        return str(ldap.dn.str2dn(dn)[0][0][1]).lower()
+    except (ldap.DECODING_ERROR, IndexError):
+        return dn.split(",", 1)[0].split("=", 1)[-1].lower()
+
+
 def feide_check_format(finding: Finding) -> str:
     """Takes a finding; returns it as one tab separated state file line: DN,
     attribute, message and value."""
@@ -500,6 +516,7 @@ def feide_check_scan(conn: ldap.ldapobject.LDAPObject, args: argparse.Namespace)
             continue
         uid = (decoded.get(args.uid_attr.lower()) or [""])[0]
         uids[dn] = uid
+        args.scanned.add(feide_check_cn(dn))
         excluded: Optional[list[Problem]] = feide_check_excluded_reason(decoded) if args.is_ad else None
         if excluded is not None:
             for problem in excluded:
@@ -525,11 +542,17 @@ def feide_check_report(findings: set[Finding], args: argparse.Namespace) -> int:
     """Takes all findings and the parsed arguments; prints them with the
     totals and, on a full scan, the changes since the previous scan, then
     replaces the state file. With --only, only the findings for those
-    attributes are printed, counted and returned, while the state file
-    still records every finding. Returns the exit code: 0 for no findings, 1
+    attributes are printed, counted and returned, and with --exclude the
+    findings of those accounts are left out the same way, while the state
+    file still records every finding. An --exclude name that was not
+    scanned stops the report before anything is printed. Returns the exit code: 0 for no findings, 1
     for findings, 2 when the state file cannot be saved."""
     excepted: list[tuple[Finding, str]] = []
     open_findings: set[Finding] = set()
+    unknown: list[str] = sorted(args.excluded - args.scanned)
+    if unknown:
+        print(f"feide_check: --exclude: {', '.join(unknown)} not found among the scanned accounts", file=sys.stderr)
+        return 2
     for finding in findings:
         reason = feide_check_exception(finding, args)
         if reason is None:
@@ -547,6 +570,11 @@ def feide_check_report(findings: set[Finding], args: argparse.Namespace) -> int:
         excepted = [(finding, reason) for finding, reason in excepted if finding[2].lower() in only]
         new = [line for line in new if line.split("\t")[1].lower() in only]
         fixed = {line for line in fixed if line.split("\t")[1].lower() in only}
+    if args.excluded:
+        findings = {finding for finding in findings if feide_check_cn(finding[0]) not in args.excluded}
+        excepted = [(finding, reason) for finding, reason in excepted if feide_check_cn(finding[0]) not in args.excluded]
+        new = [line for line in new if feide_check_cn(line.split("\t")[0]) not in args.excluded]
+        fixed = {line for line in fixed if feide_check_cn(line.split("\t")[0]) not in args.excluded}
     hidden: set[Finding] = {finding for finding in findings if finding[3] == FEIDE_CHECK_HIDE_EXTRA_MESSAGE}
     # Every finding row starts with a status column (empty, EXCEPTED or
     # NEW), so the DN is always the second field.
