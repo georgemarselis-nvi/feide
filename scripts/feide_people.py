@@ -965,6 +965,11 @@ def feide_people_main() -> None:
     path: str = config["FEIDE_PEOPLE_SOCKET"]
     if os.path.exists(path):
         os.unlink(path)
+    # The socket is created with the umask, so set it first: the socket is
+    # never reachable by anyone but its owner, not even for the moment
+    # between creating it and the chmod below. The program writes no
+    # files, so the umask can stay.
+    os.umask(0o077)
     server = feide_people_server(path, feide_people_handler)
     os.chmod(path, 0o600)
     server.config = config
