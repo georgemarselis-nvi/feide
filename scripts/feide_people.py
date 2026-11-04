@@ -188,8 +188,9 @@ FEIDE_PEOPLE_RESULT_CODES: frozenset[int] = frozenset({
     FEIDE_PEOPLE_LDAP_UNWILLING_TO_PERFORM, FEIDE_PEOPLE_LDAP_OTHER,
 })
 FEIDE_PEOPLE_AUTH_SIMPLE: int = 128
-# slapd also sends 3 (children); it is answered with no entries, as before.
-FEIDE_PEOPLE_SCOPES: tuple[int, ...] = (ldap.SCOPE_BASE, ldap.SCOPE_ONELEVEL, ldap.SCOPE_SUBTREE, 3)
+# Scope 3 (children): everything below the base, not the base itself.
+FEIDE_PEOPLE_SCOPE_CHILDREN: int = 3
+FEIDE_PEOPLE_SCOPES: tuple[int, ...] = (ldap.SCOPE_BASE, ldap.SCOPE_ONELEVEL, ldap.SCOPE_SUBTREE, FEIDE_PEOPLE_SCOPE_CHILDREN)
 
 
 class feide_people_bad_request(ValueError):
@@ -768,7 +769,7 @@ def feide_people_search(config: Config, request: Request, write: Callable[[str],
             feide_people_filtered("SEARCH", uid, request, "not a person")
             return FEIDE_PEOPLE_LDAP_NO_SUCH_OBJECT, config["PEOPLE_DN"], 0
         # A person entry is a leaf: base and subtree both mean the entry
-        # itself, one level means nothing. The entry is looked up without
+        # itself, one level and children mean nothing. The entry is looked up without
         # the filter so that "no such entry" and "does not match" differ.
         ad = feide_people_ad_lookup(config, uid)
         if ad is None:
@@ -778,7 +779,7 @@ def feide_people_search(config: Config, request: Request, write: Callable[[str],
         if reason is not None:
             feide_people_filtered("SEARCH", uid, request, reason)
             return FEIDE_PEOPLE_LDAP_NO_SUCH_OBJECT, config["PEOPLE_DN"], 0
-        if scope == ldap.SCOPE_ONELEVEL:
+        if scope in (ldap.SCOPE_ONELEVEL, FEIDE_PEOPLE_SCOPE_CHILDREN):
             return FEIDE_PEOPLE_LDAP_SUCCESS, "", 0
         built = feide_people_build_entry(config, ad)
         if built is not None:
