@@ -52,7 +52,10 @@
 #   administrator keeps the marker, and such accounts must not reach FEIDE;
 #   description containing "Ekstern bruker": external users must not log in
 #   to FEIDE;
-#   accountExpires in the past: the account has expired but is still enabled.
+#   accountExpires in the past: the account has expired but is still enabled;
+#   mobile or telephoneNumber holding the placeholder +4700000000: Support
+#   puts it on hidden and disabled accounts that have no real number, so the
+#   account must not reach FEIDE.
 #
 # Only the system user in SIKT_BIND_DN may search. slapd sends the bound DN
 # with every request (extensions binddn); any other search is refused before
@@ -124,13 +127,15 @@ Config = dict[str, Any]
 
 FEIDE_PEOPLE_AD_PERSON_FILTER: str = "(&(objectCategory=person)(objectClass=user))"
 FEIDE_PEOPLE_AD_USER_FILTER: str = "(&(objectCategory=person)(objectClass=user)(!(userAccountControl:1.2.840.113556.1.4.803:=2)))"
-FEIDE_PEOPLE_AD_ATTRS: list[str] = ["sAMAccountName", "userPrincipalName", "displayName", "givenName", "sn", "mail", "mobile", "info", "description", "accountExpires", "userAccountControl"]
+FEIDE_PEOPLE_AD_ATTRS: list[str] = ["sAMAccountName", "userPrincipalName", "displayName", "givenName", "sn", "mail", "mobile", "telephoneNumber", "info", "description", "accountExpires", "userAccountControl"]
 # userAccountControl bit set on a disabled account.
 FEIDE_PEOPLE_UAC_DISABLED: int = 0x2
 FEIDE_PEOPLE_OBJECTCLASSES: list[str] = ["top", "person", "organizationalPerson", "inetOrgPerson", "eduPerson", "norEduPerson", "schacContactLocation"]
 FEIDE_PEOPLE_PAGE_SIZE: int = 500
 FEIDE_PEOPLE_HIDE_MARKER: str = "skjulmeg"
 FEIDE_PEOPLE_EXTERNAL_MARKER: str = "ekstern bruker"
+# Placeholder phone number Support puts on hidden and disabled accounts.
+FEIDE_PEOPLE_PLACEHOLDER_PHONE: str = "+4700000000"
 # accountExpires counts 100 ns intervals since 1601-01-01 UTC; 0 and the
 # largest value both mean the account never expires.
 FEIDE_PEOPLE_FILETIME_EPOCH: datetime.datetime = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc)
@@ -258,8 +263,8 @@ def feide_people_filetime(value: str) -> Optional[datetime.datetime]:
 def feide_people_excluded_reason(ad: AdAttrs) -> Optional[str]:
     """Takes the Active Directory attributes of a person; returns why the
     account must not reach FEIDE (disabled, "skjulmeg" in info, "Ekstern
-    bruker" in description, or an accountExpires date that has passed), or
-    None."""
+    bruker" in description, an accountExpires date that has passed, or the
+    placeholder phone number in mobile or telephoneNumber), or None."""
     try:
         control = int(feide_people_first(ad, "userAccountControl") or "0")
     except ValueError:
@@ -273,6 +278,9 @@ def feide_people_excluded_reason(ad: AdAttrs) -> Optional[str]:
     expires = feide_people_filetime(feide_people_first(ad, "accountExpires") or "0")
     if expires is not None and expires <= datetime.datetime.now(datetime.timezone.utc):
         return "account expired " + expires.date().isoformat()
+    for name in ("mobile", "telephoneNumber"):
+        if any(value.strip() == FEIDE_PEOPLE_PLACEHOLDER_PHONE for value in ad.get(name, [])):
+            return "placeholder phone number in " + name
     return None
 
 

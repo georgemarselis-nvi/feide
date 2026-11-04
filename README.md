@@ -26,7 +26,7 @@ created by the proxy; it is what the proxy assumes exists.
 - A KVM host, or a hypervisor that imports a qcow2 image, to run one
   virtual machine: a network address the domain controllers can reach,
   outbound internet to brreg and the egress-IP services, inbound port 636
-  open to the Sikt servers below (Sikt ticket #551520):
+  open to the Sikt servers below:
   - 13.49.2.131
   - 13.49.86.217
   - 13.49.194.146
@@ -83,7 +83,7 @@ This list has two halves:
   hours, with every attribute, to find faults. It binds as a system user which NVI
   creates and whose credentials NVI gives to Sikt; Sikt has no service account of
   its own. At login, FEIDE also binds as the user to check the password. LDAP ACLs
-  must permit both. (Sikt ticket #551520)
+  must permit both.
 - The NVI FEIDE proxy exposes only the minimal attribute set: the mandatory attributes
   plus displayName, mail, mobile, eduPersonAffiliation and eduPersonScopedAffiliation.
   We operate on an allowlist, not a denylist. Anything beyond it is added when a
@@ -138,7 +138,10 @@ Active Directory, so the rules below are Active Directory rules, not proxy rules
     Active Directory administrator keeps the marker on purpose;
   - accounts whose description contains "Ekstern bruker". External users must
     not log in to FEIDE;
-  - accounts whose accountExpires date has passed but which are still enabled.
+  - accounts whose accountExpires date has passed but which are still enabled;
+  - accounts whose mobile or telephoneNumber holds the placeholder
+    +4700000000, which Support puts on hidden and disabled accounts that have
+    no real number.
 
   The proxy leaves them out of every reply. A bind as one of them is refused
   with invalid credentials, as if the account did not exist, and the real

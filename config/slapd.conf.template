@@ -61,7 +61,7 @@ security	ssf=128
 loglevel	stats
 
 # Access control. Sikt's crawler binds as the system user named in
-# .env and reads everything under the base DN (Sikt ticket #551520).
+# .env and reads everything under the base DN.
 # Everyone else may only bind: back-sock checks auth access before it
 # hands a bind to feide_people.py, and FEIDE binds as each user to check
 # the password. Nothing is readable without the system user.
