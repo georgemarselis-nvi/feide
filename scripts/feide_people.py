@@ -760,7 +760,7 @@ def feide_people_search(config: Config, request: Request, write: Callable[[str],
     if base_normalized == config["PEOPLE_DN_NORMALIZED"]:
         if scope in (ldap.SCOPE_BASE, ldap.SCOPE_SUBTREE):
             candidates.append(feide_people_people_entry(config))
-        users = search_ad and scope in (ldap.SCOPE_ONELEVEL, ldap.SCOPE_SUBTREE)
+        users = search_ad and scope in (ldap.SCOPE_ONELEVEL, ldap.SCOPE_SUBTREE, FEIDE_PEOPLE_SCOPE_CHILDREN)
     else:
         uid = feide_people_uid_from_dn(config, base)
         if uid is None:
