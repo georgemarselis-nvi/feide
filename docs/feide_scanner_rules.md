@@ -67,6 +67,14 @@ Directory only.
     the cloud show up here too, so check before disabling anyone.
 19. An enabled account whose accountExpires date has passed is
     reported, since it still reaches FEIDE.
+20. An info (Notes) field that does not contain "skjulmeg" but holds
+    something close to it is reported, since the proxy matches the
+    marker exactly and the account reaches FEIDE. Close means at most
+    two letter changes away, after lower-casing and dropping everything
+    but letters, for a word, two neighbouring words joined, or the
+    whole value: "skulmeg", "skjul meg", "Skjul-Meg". It is printed with
+    the other skjulmeg findings. A word that is close by chance goes in
+    the exceptions file.
 
 ## Exceptions
 

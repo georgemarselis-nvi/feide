@@ -70,6 +70,10 @@ FEIDE_CHECK_NORWEGIAN_PHONE_RE: re.Pattern[str] = re.compile(r"^\+47[0-9]{8}$")
 FEIDE_CHECK_INTERNATIONAL_PHONE_RE: re.Pattern[str] = re.compile(r"^\+[1-9][0-9]{2,}$")
 FEIDE_CHECK_HIDE_MARKER: str = "skjulmeg"
 FEIDE_CHECK_HIDE_EXTRA_MESSAGE: str = "Marked \"skjulmeg\", with spaces or other characters"
+FEIDE_CHECK_HIDE_TYPO_MESSAGE: str = "Close to \"skjulmeg\", check the marker"
+# Most letter changes (insert, delete, replace) between a word in info
+# and "skjulmeg" that still count as a misspelt marker.
+FEIDE_CHECK_HIDE_TYPO_DISTANCE: int = 2
 FEIDE_CHECK_EXTERNAL_MARKER: str = "ekstern bruker"
 # lastLogonTimestamp counts 100 ns intervals since 1601-01-01 UTC.
 FEIDE_CHECK_FILETIME_EPOCH: datetime.datetime = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc)
@@ -342,6 +346,32 @@ def feide_check_excluded_reason(attrs: Attrs) -> Optional[list[Problem]]:
     return None
 
 
+def feide_check_distance(first: str, second: str) -> int:
+    """Takes two strings; returns the Levenshtein distance between them: the
+    fewest single-letter inserts, deletes and replacements that turn one
+    into the other."""
+    previous = list(range(len(second) + 1))
+    for i, a in enumerate(first, 1):
+        current = [i]
+        for j, b in enumerate(second, 1):
+            current.append(min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (a != b)))
+        previous = current
+    return previous[-1]
+
+
+def feide_check_hide_typo(value: str) -> bool:
+    """Takes an info value that does not contain "skjulmeg"; returns True
+    when it holds something close to it: after lower-casing and dropping
+    everything but letters, a word, two neighbouring words joined, or the
+    whole value is at most FEIDE_CHECK_HIDE_TYPO_DISTANCE changes away. The
+    proxy matches the marker exactly, so a misspelt marker lets the account
+    reach FEIDE."""
+    words = ["".join(char for char in word.lower() if char.isalpha()) for word in value.split()]
+    words = [word for word in words if word]
+    candidates = words + [first + second for first, second in zip(words, words[1:])] + ["".join(words)]
+    return any(feide_check_distance(candidate, FEIDE_CHECK_HIDE_MARKER) <= FEIDE_CHECK_HIDE_TYPO_DISTANCE for candidate in candidates)
+
+
 def feide_check_is_person(attrs: Attrs, args: argparse.Namespace) -> bool:
     """Takes the decoded attributes; returns True when the account is a
     person by --account-pattern and --blocklist. Without a pattern every
@@ -365,9 +395,12 @@ def feide_check_filetime(value: str) -> Optional[datetime.datetime]:
 def feide_check_ad(attrs: Attrs, args: argparse.Namespace) -> list[Problem]:
     """Takes the decoded attributes of an Active Directory account; returns
     the problems that only make sense against Active Directory: phone
-    fields, the "Surname, Given" displayName, the last logon and an
-    expiry date that has passed."""
+    fields, the "Surname, Given" displayName, the last logon, an expiry
+    date that has passed and a misspelt "skjulmeg" marker."""
     errors: list[Problem] = []
+    for value in attrs.get("info", []):
+        if feide_check_hide_typo(value):
+            errors.append(("info", FEIDE_CHECK_HIDE_TYPO_MESSAGE, value))
     if not attrs.get("mobile"):
         errors.append(("mobile", "Missing mobile", ""))
     if not attrs.get("telephonenumber"):
@@ -575,7 +608,7 @@ def feide_check_report(findings: set[Finding], args: argparse.Namespace) -> int:
         excepted = [(finding, reason) for finding, reason in excepted if feide_check_cn(finding[0]) not in args.excluded]
         new = [line for line in new if feide_check_cn(line.split("\t")[0]) not in args.excluded]
         fixed = {line for line in fixed if feide_check_cn(line.split("\t")[0]) not in args.excluded}
-    hidden: set[Finding] = {finding for finding in findings if finding[3] == FEIDE_CHECK_HIDE_EXTRA_MESSAGE}
+    hidden: set[Finding] = {finding for finding in findings if finding[3] in (FEIDE_CHECK_HIDE_EXTRA_MESSAGE, FEIDE_CHECK_HIDE_TYPO_MESSAGE)}
     # Every finding row starts with a status column (empty, EXCEPTED or
     # NEW), so the DN is always the second field.
     rows: list[list[str]] = [[""] + feide_check_fields(finding) for finding in sorted(findings - hidden)]
