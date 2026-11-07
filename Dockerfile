@@ -36,7 +36,19 @@
 # AlmaLinux 9 does not ship openldap-servers in its own repositories; it
 # comes from EPEL 9, which is why EPEL is enabled below.
 
-FROM quay.io/almalinux/almalinux:9
+# First stage: python-ldap has no package for Python 3.14, so it is
+# compiled here. Only the result is copied into the image below; the
+# compiler and headers stay behind in this stage.
+FROM docker.io/library/almalinux:9 AS python-ldap
+
+RUN /usr/bin/dnf install -y dnf-plugins-core
+RUN /usr/bin/dnf config-manager --set-enabled crb
+RUN /usr/bin/dnf install -y gcc python3.14 python3.14-devel python3.14-pip openldap-devel cyrus-sasl-devel
+COPY config/python-requirements.txt /tmp/python-requirements.txt
+RUN /usr/bin/python3.14 -m pip install --no-cache-dir --require-hashes --target /opt/python-ldap -r /tmp/python-requirements.txt
+
+# Second stage: the image itself.
+FROM docker.io/library/almalinux:9
 
 LABEL org.opencontainers.image.title="feide-ldap-proxy"
 LABEL org.opencontainers.image.description="OpenLDAP proxy presenting Active Directory to FEIDE with the norEdu schema"
@@ -44,8 +56,11 @@ LABEL org.opencontainers.image.source="https://github.com/georgemarselis-nvi/fei
 LABEL org.opencontainers.image.licenses="GPL-3.0-or-later"
 
 RUN /usr/bin/dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
-RUN /usr/bin/dnf install -y openldap-servers openldap-clients cyrus-sasl-gssapi krb5-workstation gettext python3 python3-ldap nftables util-linux
-RUN /usr/bin/dnf clean all
+RUN /usr/bin/dnf install -y openldap-servers openldap-clients cyrus-sasl-gssapi krb5-workstation gettext python3.14 nftables util-linux && /usr/bin/dnf clean all
+
+# python-ldap and its pyasn1 dependencies, compiled for Python 3.14 in the
+# first stage.
+COPY --from=python-ldap /opt/python-ldap /usr/lib64/python3.14/site-packages/
 
 # Kerberos: slapd runs as the ldap user and binds to Active Directory
 # over SASL GSSAPI. With a client keytab set, libkrb5 fetches its own

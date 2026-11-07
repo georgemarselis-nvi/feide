@@ -131,7 +131,7 @@ entrypoint_summary() {
 # Starts feide_people.py in the background and waits up to ten seconds
 # for its socket; slapd cannot answer anything without it.
 entrypoint_start_people() {
-	/usr/bin/python3 "$ENTRYPOINT_PEOPLE" &
+	/usr/bin/python3.14 "$ENTRYPOINT_PEOPLE" &
 	for second in 1 2 3 4 5 6 7 8 9 10; do
 		[ -S "$ENTRYPOINT_PEOPLE_SOCKET" ] && return 0
 		/usr/bin/sleep 1

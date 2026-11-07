@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/python3.14
 # feide_people.py
 # Answers slapd's requests for the whole directory over the back-sock socket: the organisation entry from .env, and people read live from Active Directory with the values FEIDE expects.
 #
