@@ -198,3 +198,17 @@ The logs for slapd are sent off the machine at build time; changing its
 destination or level, like any other change, means rebuilding the machine from
 the repository and replacing it. Nothing is edited in place. The certificate is
 issued fresh at every build, so the machine is rebuilt before it expires.
+
+The container holds no configuration of its own. At start it reads three
+things from the virtual machine, mounted into it:
+
+- /etc/feide/.env: the settings orchestrator.sh discovered and wrote on the
+  virtual machine (domain, organisation number, Active Directory server, Sikt
+  addresses and the rest). The entrypoint refuses to start if any value is
+  missing.
+- /etc/krb5.keytab: the machine keytab from join-domain.sh, used for the
+  Kerberos bind to Active Directory.
+- /etc/openldap/certs/: the public certificate and key for the LDAPS name.
+
+On the machine that runs the scanner, /etc/feide is also where it looks for
+its exceptions file, scanner-exceptions.tsv.
