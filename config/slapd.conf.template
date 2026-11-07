@@ -77,6 +77,7 @@ suffix		"${BASE_DN}"
 rootdn		"cn=admin,${BASE_DN}"
 readonly	on
 socketpath	/var/run/openldap/feide-people.sock
-# Every request carries the DN the connection is bound as, so
-# feide_people.py can refuse searches from anyone but the system user.
-extensions	binddn
+# Every request carries the DN the connection is bound as and the
+# client address, so feide_people.py can refuse searches from anyone but
+# the system user and requests from anywhere but Sikt.
+extensions	binddn peername

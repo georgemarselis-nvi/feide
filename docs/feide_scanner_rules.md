@@ -66,7 +66,19 @@ Directory only.
     (default 180), is reported. People who only use Microsoft 365 in
     the cloud show up here too, so check before disabling anyone.
 19. An enabled account whose accountExpires date has passed is
-    reported, since it still reaches FEIDE.
+    reported, since it still reaches FEIDE. An account whose date is
+    still in the future is printed as INFO with the date: information,
+    not a failure. INFO lines do not count in the exit code and are not
+    written to the state file; once the date passes, the account is
+    reported under this rule.
+20. An info (Notes) field that does not contain "skjulmeg" but holds
+    something close to it is reported, since the proxy matches the
+    marker exactly and the account reaches FEIDE. Close means at most
+    two letter changes away, after lower-casing and dropping everything
+    but letters, for a word, two neighbouring words joined, or the
+    whole value: "skulmeg", "skjul meg", "Skjul-Meg". It is printed with
+    the other skjulmeg findings. A word that is close by chance goes in
+    the exceptions file.
 
 ## Exceptions
 

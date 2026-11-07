@@ -44,6 +44,10 @@
 #   SIKT_ACCOUNT            set by hand; the AD account Sikt logs in with
 #   SIKT_BIND_DN            from SIKT_ACCOUNT and DOMAIN:
 #                           uid=<SIKT_ACCOUNT>,ou=people,<base DN>
+#   FEIDE_PEOPLE_SIKT_ADDRESSES
+#                           the addresses Sikt's servers connect from,
+#                           space separated; defaults to the list Sikt
+#                           gave if absent
 #   AD_BASE_DN              optional, set by hand; where people are
 #                           searched in AD. Without it, the whole domain
 #
@@ -71,6 +75,7 @@ ORCHESTRATOR_DIR=$(/usr/bin/dirname "$0")
 ORCHESTRATOR_ENV_FILE="${ORCHESTRATOR_ENV_FILE:-.env}"
 ORCHESTRATOR_KEYTAB="${ORCHESTRATOR_KEYTAB:-/etc/krb5.keytab}"
 ORCHESTRATOR_DEFAULT_SCHEMA_VERSION="2.0"
+ORCHESTRATOR_DEFAULT_SIKT_ADDRESSES="13.49.2.131 13.49.86.217 13.49.194.146 18.192.97.158 18.193.183.248 18.198.58.80 2a05:d016:15b:5a00::/56 2a05:d014:909:ad00::/56"
 
 orchestrator_usage() {
 	echo "usage: $0 [env-file]" >&2
@@ -141,6 +146,11 @@ orchestrator_resolve_schema_version() {
 	orchestrator_set NOREDUORGSCHEMAVERSION "$ORCHESTRATOR_DEFAULT_SCHEMA_VERSION"
 }
 
+orchestrator_resolve_sikt_addresses() {
+	orchestrator_has FEIDE_PEOPLE_SIKT_ADDRESSES && return 0
+	orchestrator_set FEIDE_PEOPLE_SIKT_ADDRESSES "$ORCHESTRATOR_DEFAULT_SIKT_ADDRESSES"
+}
+
 orchestrator_resolve_ad_server() {
 	orchestrator_has AD_SERVER && return 0
 	dc=$(orchestrator_first_dc "$DOMAIN")
@@ -196,6 +206,7 @@ orchestrator_summary() {
 	echo "  ORG_MAIL                $ORG_MAIL"
 	echo "  EDUPERSONAFFILIATION    $EDUPERSONAFFILIATION"
 	echo "  FEIDE_PEOPLE_ACCOUNT_PATTERN  $FEIDE_PEOPLE_ACCOUNT_PATTERN"
+	echo "  FEIDE_PEOPLE_SIKT_ADDRESSES   $FEIDE_PEOPLE_SIKT_ADDRESSES"
 	echo "  keytab                  $ORCHESTRATOR_KEYTAB"
 	echo
 	echo "Check the organisation number against Brønnøysundregisteret before going further."
@@ -207,6 +218,7 @@ orchestrator() {
 	orchestrator_resolve_domain || return 1
 	orchestrator_resolve_brreg || return 1
 	orchestrator_resolve_schema_version
+	orchestrator_resolve_sikt_addresses
 	orchestrator_resolve_acronym || return 1
 	orchestrator_resolve_by_hand || return 1
 	orchestrator_resolve_sikt || return 1

@@ -72,6 +72,14 @@
 # Active Directory is contacted. Binds are open, since FEIDE checks each
 # user's password on a connection that is not bound yet.
 #
+# Only Sikt's servers may ask at all. The firewall already blocks every
+# other address; this is the second line. slapd sends the client address
+# with every request (extensions peername). A request from an address
+# outside FEIDE_PEOPLE_SIKT_ADDRESSES in .env gets the answer an unknown
+# account gets, invalid credentials on a bind and no such object on a
+# search, and an ALARM line is logged, since it means the firewall let it
+# through.
+#
 # Logging: every request is logged on a REQUEST line when it arrives
 # (command, binddn, dn, base, scope and filter; never the password) and on
 # one more line with its outcome.
@@ -113,6 +121,7 @@ from __future__ import annotations
 import argparse
 import base64
 import datetime
+import ipaddress
 import os
 import re
 import socketserver
@@ -150,7 +159,7 @@ FEIDE_PEOPLE_PLACEHOLDER_PHONE: str = "+4700000000"
 # largest value both mean the account never expires.
 FEIDE_PEOPLE_FILETIME_EPOCH: datetime.datetime = datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc)
 FEIDE_PEOPLE_FILETIME_NEVER: int = 0x7FFFFFFFFFFFFFFF
-FEIDE_PEOPLE_REQUIRED_ENV: tuple[str, ...] = ("FEIDE_PEOPLE_SOCKET", "FEIDE_PEOPLE_AD_CA", "AD_SERVER", "DOMAIN", "BASE_DN", "AD_BASE_DN", "EDUPERSONAFFILIATION", "SIKT_BIND_DN", "FEIDE_PEOPLE_ACCOUNT_PATTERN", "DC", "NAVN", "ORGANISASJONSNUMMER", "NOREDUORGACRONYM", "NOREDUORGSCHEMAVERSION", "ORG_MAIL")
+FEIDE_PEOPLE_REQUIRED_ENV: tuple[str, ...] = ("FEIDE_PEOPLE_SOCKET", "FEIDE_PEOPLE_AD_CA", "AD_SERVER", "DOMAIN", "BASE_DN", "AD_BASE_DN", "EDUPERSONAFFILIATION", "SIKT_BIND_DN", "FEIDE_PEOPLE_ACCOUNT_PATTERN", "DC", "NAVN", "ORGANISASJONSNUMMER", "NOREDUORGACRONYM", "NOREDUORGSCHEMAVERSION", "ORG_MAIL", "FEIDE_PEOPLE_SIKT_ADDRESSES")
 FEIDE_PEOPLE_ORG_OBJECTCLASSES: list[str] = ["top", "dcObject", "organization", "eduOrg", "norEduOrg"]
 FEIDE_PEOPLE_COMMANDS: tuple[str, ...] = ("SEARCH", "BIND", "UNBIND")
 # Norwegian letters, and ö, -> ASCII, for uid and mail, which FEIDE takes in ASCII only.
@@ -249,6 +258,11 @@ def feide_people_config() -> Config:
     config["BASE_DN_NORMALIZED"] = feide_people_normalize_dn(config["BASE_DN"])
     config["SIKT_BIND_DN_NORMALIZED"] = feide_people_normalize_dn(config["SIKT_BIND_DN"])
     config["BLOCKLIST"] = {name.lower() for name in os.environ.get("FEIDE_PEOPLE_ACCOUNT_BLOCKLIST", "").split()}
+    try:
+        config["SIKT_NETWORKS"] = [ipaddress.ip_network(text, strict=False) for text in config["FEIDE_PEOPLE_SIKT_ADDRESSES"].split()]
+    except ValueError as error:
+        feide_people_log("FEIDE_PEOPLE_SIKT_ADDRESSES holds an address that does not parse: %s" % error)
+        sys.exit(1)
     return config
 
 
@@ -897,10 +911,35 @@ def feide_people_read_request(rfile: Any) -> tuple[str, Request]:
     return command, request
 
 
+def feide_people_peer_address(peername: str) -> Optional[str]:
+    """Takes slapd's peername ("IP=1.2.3.4:5678" or "IP=[2001:db8::1]:5678");
+    returns the address alone, or None for anything else (a Unix socket
+    path, or nothing)."""
+    if not peername.startswith("IP="):
+        return None
+    host = peername[3:].rsplit(":", 1)[0]
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    return host
+
+
+def feide_people_from_sikt(config: Config, request: Request) -> bool:
+    """Takes a request; returns True when its client address is one of
+    Sikt's. A missing or unreadable address counts as not Sikt."""
+    address = feide_people_peer_address(request.get("peername", ""))
+    if address is None:
+        return False
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return any(ip in network for network in config["SIKT_NETWORKS"])
+
+
 def feide_people_describe(command: str, request: Request) -> str:
     """Takes a command and its request; returns the fields worth logging.
     The password (cred) is never included."""
-    fields = ("binddn", "dn", "base", "scope", "filter")
+    fields = ("peername", "binddn", "dn", "base", "scope", "filter")
     return " ".join("%s=%r" % (name, request[name]) for name in fields if name in request)
 
 
@@ -922,6 +961,16 @@ class feide_people_handler(socketserver.StreamRequestHandler):
             write(feide_people_result(FEIDE_PEOPLE_LDAP_PROTOCOL_ERROR, info="bad request"))
             return
         feide_people_log("REQUEST %s %s" % (command or "<empty>", feide_people_describe(command, request)))
+
+        if command != "UNBIND" and not feide_people_from_sikt(config, request):
+            feide_people_log("ALARM %s from %r, which is not a Sikt address; the firewall should have blocked it" % (command or "<empty>", request.get("peername", "")))
+            if command == "BIND":
+                write(feide_people_result(FEIDE_PEOPLE_LDAP_INVALID_CREDENTIALS))
+            elif command == "SEARCH":
+                write(feide_people_result(FEIDE_PEOPLE_LDAP_NO_SUCH_OBJECT, config["PEOPLE_DN"]))
+            else:
+                write(feide_people_result(FEIDE_PEOPLE_LDAP_UNWILLING_TO_PERFORM, info="read only"))
+            return
 
         try:
             if command == "SEARCH" and not feide_people_is_system_user(config, request.get("binddn", "")):
