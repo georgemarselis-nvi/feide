@@ -33,10 +33,10 @@
 # organisation entry and ou=people over back-sock) and starts slapd on
 # LDAPS only.
 #
-# Red Hat does not ship openldap-servers in RHEL 9 itself; it comes
-# from EPEL 9, which is why EPEL is enabled below.
+# AlmaLinux 9 does not ship openldap-servers in its own repositories; it
+# comes from EPEL 9, which is why EPEL is enabled below.
 
-FROM registry.access.redhat.com/ubi9/ubi:9.6
+FROM quay.io/almalinux/almalinux:9
 
 LABEL org.opencontainers.image.title="feide-ldap-proxy"
 LABEL org.opencontainers.image.description="OpenLDAP proxy presenting Active Directory to FEIDE with the norEdu schema"
